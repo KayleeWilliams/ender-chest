@@ -1,0 +1,24 @@
+{
+  "name": "ender-chest",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tools/zig build test && tools/zig build -Doptimize=ReleaseSafe && vitest run",
+    "test:unit": "tools/zig build test",
+    "test:integration": "tools/zig build -Doptimize=ReleaseSafe && vitest run src/native.test.ts src/cliproxy.test.ts src/credentials.test.ts",
+    "test:e2e": "tools/zig build -Doptimize=ReleaseSafe && vitest run src/native.test.ts",
+    "ec": "./ec"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "smol-toml": "^1.8.0"
+  },
+  "description": "Sync development machine config and agent skills with a native CLI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KayleeWilliams/ender-chest-cli.git"
+  }
+}

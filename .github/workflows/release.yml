@@ -1,0 +1,139 @@
+name: release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      source_hash: ${{ steps.plan.outputs.source_hash }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install archive tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
+      - name: Hash Zig sources
+        id: hash
+        run: |
+          set -eu
+          tools/zig build -Doptimize=ReleaseSafe
+          hash=$(tr -d '[:space:]' < zig-out/source_hash.txt)
+          echo "source_hash=$hash" >> "$GITHUB_OUTPUT"
+      - name: Choose the next patch release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HASH: ${{ steps.hash.outputs.source_hash }}
+        run: |
+          set -eu
+          echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
+          if tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName); then
+            dir=$(mktemp -d)
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern manifest.json --dir "$dir"
+            published=$(python3 -c 'import json; print(json.load(open("'"$dir"'/manifest.json"))["source_hash"])')
+            if [ "$published" = "$SOURCE_HASH" ]; then
+              echo "ec $tag already matches this source."
+              echo "version=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            version=$(tools/release-version.sh "$tag")
+          else
+            version=0.0.1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+  binaries:
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-macos.13.0
+            asset: ec-aarch64-macos
+          - target: x86_64-macos.13.0
+            asset: ec-x86_64-macos
+          - target: aarch64-linux-musl
+            asset: ec-aarch64-linux
+          - target: x86_64-linux-musl
+            asset: ec-x86_64-linux
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install archive tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
+      - name: Build the release binary
+        run: |
+          set -eu
+          tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${{ needs.plan.outputs.version }}
+          test "$(tr -d '[:space:]' < zig-out/source_hash.txt)" = "${{ needs.plan.outputs.source_hash }}"
+          mkdir -p dist
+          cp zig-out/bin/ec "dist/${{ matrix.asset }}"
+          cp zig-out/source_hash.txt dist/source_hash.txt
+          sha256sum "dist/${{ matrix.asset }}" | awk '{print $1}' > "dist/${{ matrix.asset }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*
+  publish:
+    needs: [plan, binaries]
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ec-*
+          path: dist
+      - name: Publish the patch release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SOURCE_HASH: ${{ needs.plan.outputs.source_hash }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          keys = {
+              "ec-aarch64-macos": "aarch64-macos",
+              "ec-x86_64-macos": "x86_64-macos",
+              "ec-aarch64-linux": "aarch64-linux",
+              "ec-x86_64-linux": "x86_64-linux",
+          }
+          root = pathlib.Path("dist")
+          assets = {}
+          hashes = set()
+          for name, key in keys.items():
+              matches = [p for p in root.glob(f"**/{name}") if p.is_file()]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one {name}, found {matches}")
+              binary = matches[0]
+              data = binary.read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              sidecar = binary.with_name(name + ".sha256").read_text().strip().split()[0]
+              if digest != sidecar:
+                  raise SystemExit(f"checksum mismatch for {name}")
+              source = binary.with_name("source_hash.txt").read_text().strip()
+              if source != os.environ["SOURCE_HASH"]:
+                  raise SystemExit(f"source hash mismatch for {name}")
+              hashes.add(source)
+              publish = pathlib.Path("publish")
+              publish.mkdir(parents=True, exist_ok=True)
+              (publish / name).write_bytes(data)
+              (publish / f"{name}.sha256").write_text(digest + "\n")
+              assets[key] = {"name": name, "sha256": digest}
+          if hashes != {os.environ["SOURCE_HASH"]}:
+              raise SystemExit("source hashes disagree")
+          manifest = {
+              "schema_version": 1,
+              "version": os.environ["VERSION"],
+              "commit": os.environ["GITHUB_SHA"],
+              "source_hash": os.environ["SOURCE_HASH"],
+              "assets": assets,
+          }
+          pathlib.Path("publish/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+          gh release create "v$VERSION" publish/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ec $VERSION" \
+            --notes "ec $VERSION"$'\n\n'"source $SOURCE_HASH"$'\n'"commit $GITHUB_SHA"

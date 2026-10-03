@@ -1,0 +1,14 @@
+*.local
+**/*.local
+!**/*.local.example
+!home/.local/
+.env
+.env.*
+home/.config/ender-chest/secrets/
+home/.claude/
+home/.claude.json
+home/.codex/
+home/.grok/
+home/.cli-proxy-api/
+home/.ssh/*
+!home/.ssh/config

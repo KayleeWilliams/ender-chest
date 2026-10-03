@@ -1,0 +1,36 @@
+.DS_Store
+*.swp
+*~
+
+# Machine-local leftovers that must never be committed
+*.local
+**/*.local
+!**/*.local.example
+!home/.local/
+
+node_modules
+
+# GPG secret key material. Public key is git/gpg.pub.
+*.asc
+
+# Native build output and downloaded Zig packages
+.zig-cache/
+zig-out/
+zig-pkg/
+
+# Device credentials and generated agent settings
+home/.config/ender-chest/secrets/
+home/.claude/
+home/.claude.json
+home/.codex/
+home/.grok/
+home/.cli-proxy-api/
+.env
+.env.*
+!.env.example
+
+# Local validation output
+.local-ci/
+.local-ci-cache/
+dist/
+publish/

@@ -1,0 +1,9 @@
+{
+  "host": "desktop.example.test",
+  "relay": "user@relay.example.test",
+  "sshUser": "user",
+  "mac": "02:00:00:00:00:01",
+  "broadcast": "192.0.2.255",
+  "port": 9,
+  "waitSeconds": 180
+}

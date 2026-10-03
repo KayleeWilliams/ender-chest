@@ -1,0 +1,18 @@
+# Copy to $(brew --prefix)/etc/cliproxyapi.conf on a NEW host only.
+# Replace the client key before starting. Never commit the populated file.
+host: "127.0.0.1"
+port: 8317
+auth-dir: "~/.cli-proxy-api/auth"
+api-keys:
+  - "REPLACE_WITH_THE_SHARED_CLIENT_KEY"
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+ws-auth: true
+debug: false
+request-log: false
+logging-to-file: true
+logs-max-total-size-mb: 50
+pprof:
+  enable: false

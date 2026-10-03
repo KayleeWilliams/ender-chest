@@ -1,0 +1,2 @@
+# Install explicitly on the host. Client devices only need Tailscale and ec.
+brew "cliproxyapi"

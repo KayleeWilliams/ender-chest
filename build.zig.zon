@@ -1,0 +1,13 @@
+.{
+    .name = .ec,
+    .version = "0.1.0",
+    .fingerprint = 0x8de8bdff4bd056cd,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.16#8685923e32e8b8a795eb2715684236975a70faed",
+            .hash = "toml-0.3.0-bV14BRmKAQAWR0FT0KUKFwVJTImaFhWjSe6HfSMtNZOH",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", ".zig-version", "src" },
+}

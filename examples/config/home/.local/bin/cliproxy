@@ -1,0 +1,3 @@
+#!/bin/sh
+# Keep the old command working.
+exec "$HOME/.local/bin/ec" cliproxy "$@"

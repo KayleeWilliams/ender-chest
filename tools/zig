@@ -1,0 +1,36 @@
+#!/bin/sh
+# Build tool only. Installed ec binaries do not need Zig.
+set -eu
+version=0.16.0
+if [ -n "${ZIG:-}" ]; then
+  if [ "$("$ZIG" version)" != "$version" ]; then echo "ec needs Zig $version" >&2; exit 1; fi
+  exec "$ZIG" "$@"
+fi
+if command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$version" ]; then exec zig "$@"; fi
+case "$(uname -sm)" in
+  'Darwin arm64') target=aarch64-macos; checksum=b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489 ;;
+  'Darwin x86_64') target=x86_64-macos; checksum=0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7 ;;
+  'Linux aarch64'|'Linux arm64') target=aarch64-linux; checksum=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17 ;;
+  'Linux x86_64') target=x86_64-linux; checksum=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;;
+  *) echo "Unsupported build host. Install Zig $version and set ZIG to its path." >&2; exit 1 ;;
+esac
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/ender-chest"
+dir="$cache/zig-$target-$version"
+if [ ! -x "$dir/zig" ]; then
+  mkdir -p "$cache"
+  stage=$(mktemp -d "$cache/zig-download.XXXXXX")
+  trap 'rm -rf "$stage"' EXIT HUP INT TERM
+  echo "Downloading Zig $version for $target..." >&2
+  curl -fL --retry 3 "https://ziglang.org/download/$version/zig-$target-$version.tar.xz" -o "$stage/zig.tar.xz"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$stage/zig.tar.xz" | cut -d ' ' -f 1)
+  else
+    actual=$(shasum -a 256 "$stage/zig.tar.xz" | cut -d ' ' -f 1)
+  fi
+  [ "$actual" = "$checksum" ] || { echo 'Zig checksum mismatch; refusing to extract.' >&2; exit 1; }
+  tar -xf "$stage/zig.tar.xz" -C "$stage"
+  if [ ! -d "$dir" ]; then mv "$stage/zig-$target-$version" "$dir"; fi
+  rm -rf "$stage"
+  trap - EXIT HUP INT TERM
+fi
+exec "$dir/zig" "$@"
