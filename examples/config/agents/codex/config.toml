@@ -1,1 +1,8 @@
-# Portable Codex preferences. Keep credentials and project trust on-device.
+# Seeds ~/.codex/config.toml only when that file does not exist.
+# Choose a model through Codex. Keep tokens and trusted project paths on-device.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+
+[tui]
+notifications = true

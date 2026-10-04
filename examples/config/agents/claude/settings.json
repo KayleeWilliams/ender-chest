@@ -1,1 +1,11 @@
-{}
+{
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits"
+  },
+  "respectGitignore": true
+}

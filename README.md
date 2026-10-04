@@ -29,7 +29,9 @@ cp -R examples/config ~/my-machine-config
 git -C ~/my-machine-config init
 ```
 
-Review the files before applying them. Replace example desktop hosts and the proxy URL with your own settings. Set your Git identity in `~/.gitconfig.local`. The example contains no credentials and enables no MCP server.
+The [starter guide](examples/config/README.md) explains the shared `AGENTS.md`, Claude/Codex/Grok preferences, bundled review skill, and device-local overrides. Edit the shared instructions to match how you work. Set your Git identity in `~/.gitconfig.local`. Replace the desktop hosts and proxy URL if you use those optional commands. The example contains no credentials and enables no MCP server.
+
+For instructions tied to an individual codebase, see the separate [project example](examples/project/README.md).
 
 ```sh
 ec sync --repo ~/my-machine-config --skip-packages

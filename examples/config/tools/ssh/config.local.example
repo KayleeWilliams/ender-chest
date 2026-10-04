@@ -1,1 +1,8 @@
-# Device-only SSH hosts and key paths.
+# Sync seeds ~/.ssh/config.local once and keeps it out of ec push.
+# Replace these values and uncomment on the device that owns the key.
+# Host devbox
+#   HostName devbox.example.test
+#   User developer
+#   IdentityFile ~/.ssh/id_ed25519
+#   IdentitiesOnly yes
+#   ServerAliveInterval 30

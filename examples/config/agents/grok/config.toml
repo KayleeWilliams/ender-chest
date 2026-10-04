@@ -1,1 +1,10 @@
-# Portable Grok preferences. Keep credentials on-device.
+# Seeds ~/.grok/config.toml only when that file does not exist.
+# Choose a model and sign in on each device. Proxy settings are added by ec
+# only after you save a local token with ec cliproxy setup.
+
+[cli]
+auto_update = true
+
+[ui]
+max_thoughts_width = 120
+compact_mode = false

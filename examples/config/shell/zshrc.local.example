@@ -1,1 +1,7 @@
-# Device-only shell settings.
+# Sync seeds ~/.zshrc.local once. Put private aliases and local paths here.
+# export EDITOR="code --wait"
+# export PATH="$HOME/work/tools/bin:$PATH"
+# alias work='cd ~/work'
+#
+# Load credentials through your credential manager when needed.
+# Do not paste tokens into this template or exported command history.

@@ -4,7 +4,9 @@
 
 Install `ec`, clone your config repo, and run `ec sync --repo PATH --skip-packages`. Subsequent commands remember that checkout. Each machine needs its own Git authentication if the config repo is private.
 
-Edit the example before applying it. `home/` paths map directly to your home directory. Shared agent instructions live in `agents/shared/AGENTS.md`. Add portable preferences under `agents/claude`, `agents/codex`, and `agents/grok`. Leave tokens, account sessions, project trust, and device-only settings out of those templates.
+Edit the example before applying it. The [starter guide](../examples/config/README.md) maps each source file to its installed location and explains which preferences merge or only seed a missing config. Shared agent instructions live in `agents/shared/AGENTS.md`; sync installs them as Claude's `CLAUDE.md` and Codex/Grok's `AGENTS.md`. The separate [project example](../examples/project/README.md) shows instructions for a codebase.
+
+`home/` paths map directly to your home directory for the CLI's supported file list. Add portable preferences under `agents/claude`, `agents/codex`, and `agents/grok`. Leave tokens, account sessions, project trust, and device-only settings out of those templates.
 
 The optional `agents/shared/mcp.toml` can define `[mcp_servers.executor]` with an HTTP `url`. Leave it empty if you do not use that server. Skill sources belong in `skills/manifest.json`:
 

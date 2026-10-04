@@ -1,1 +1,5 @@
-# Device-only work identity.
+# Sync seeds ~/.config/git/identity.work once.
+# Enable the matching includeIf in ~/.gitconfig.local to use this identity.
+# [user]
+#     name = Your Name
+#     email = you@company.example.test

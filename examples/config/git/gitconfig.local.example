@@ -1,4 +1,13 @@
-# Device-only Git identity.
+# Sync seeds ~/.gitconfig.local once and preserves later edits.
+# Uncomment and set your own identity on this device.
 # [user]
 #     name = Your Name
-#     email = you@example.com
+#     email = you@example.test
+#
+# Use a separate identity for repos under ~/work/.
+# Set ~/.config/git/identity.work before enabling this include.
+# [includeIf "gitdir:~/work/"]
+#     path = ~/.config/git/identity.work
+#
+# [core]
+#     editor = code --wait
