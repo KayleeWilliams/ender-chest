@@ -17,8 +17,8 @@ jobs:
         id: hash
         run: |
           set -eu
-          (cd packages/cli && ../../tools/zig build -Doptimize=ReleaseSafe)
-          hash=$(tr -d '[:space:]' < packages/cli/zig-out/source_hash.txt)
+          (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe)
+          hash=$(tr -d '[:space:]' < packages/ec/zig-out/source_hash.txt)
           echo "source_hash=$hash" >> "$GITHUB_OUTPUT"
       - name: Choose the next patch release
         id: plan
@@ -64,11 +64,11 @@ jobs:
       - name: Build the release binary
         run: |
           set -eu
-          (cd packages/cli && ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${{ needs.plan.outputs.version }})
-          test "$(tr -d '[:space:]' < packages/cli/zig-out/source_hash.txt)" = "${{ needs.plan.outputs.source_hash }}"
+          (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${{ needs.plan.outputs.version }})
+          test "$(tr -d '[:space:]' < packages/ec/zig-out/source_hash.txt)" = "${{ needs.plan.outputs.source_hash }}"
           mkdir -p dist
-          cp packages/cli/zig-out/bin/ec "dist/${{ matrix.asset }}"
-          cp packages/cli/zig-out/source_hash.txt dist/source_hash.txt
+          cp packages/ec/zig-out/bin/ec "dist/${{ matrix.asset }}"
+          cp packages/ec/zig-out/source_hash.txt dist/source_hash.txt
           sha256sum "dist/${{ matrix.asset }}" | awk '{print $1}' > "dist/${{ matrix.asset }}.sha256"
       - uses: actions/upload-artifact@v4
         with:

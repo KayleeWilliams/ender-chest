@@ -1,6 +1,6 @@
 # Ender Chest
 
-The native CLI lives in `packages/cli/src`. Its integration tests live in `packages/cli/test`. Shared tooling lives in `tools/`; example machine config lives in `examples/config`.
+The native CLI lives in `packages/ec/src`. Its integration tests live in `packages/ec/test`. Shared tooling lives in `tools/`; example machine config lives in `examples/config`.
 
 Use pnpm and Turborepo for workspace commands. `pnpm check` runs Ultracite, Zig formatting checks, TypeScript checks, Vitest, and native Zig tests. `pnpm format` applies Oxfmt and Zig formatting. Keep the Oxlint anti-slop rules aligned with the shared Inth tooling.
 

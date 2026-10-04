@@ -12,7 +12,7 @@ cd ender-chest-cli
 pnpm install
 pnpm build
 mkdir -p ~/.local/bin
-install -m 755 packages/cli/zig-out/bin/ec ~/.local/bin/ec
+install -m 755 packages/ec/zig-out/bin/ec ~/.local/bin/ec
 ec --help
 ```
 
@@ -36,7 +36,7 @@ ec sync --repo ~/my-machine-config --skip-packages
 ec verify
 ```
 
-Sync writes the managed home files, including shell and Git config. Back up existing files and merge any settings you want to keep into your config or the `.local` overrides first. This version uses the fixed managed-file list in `packages/cli/src/sync.zig`; it is an opinionated config layout.
+Sync writes the managed home files, including shell and Git config. Back up existing files and merge any settings you want to keep into your config or the `.local` overrides first. This version uses the fixed managed-file list in `packages/ec/src/sync.zig`; it is an opinionated config layout.
 
 `--skip-packages` avoids package installation and shell framework setup. Without it, sync may install Homebrew, packages from your Brewfiles, Oh My Zsh, shell plugins, and a Node version through fnm.
 
@@ -104,8 +104,8 @@ pnpm build
 `pnpm check` runs lint, type checks, Vitest integration tests, and native Zig tests. The integration tests exercise the compiled CLI in temporary homes and Git repos, including HTTP requests, UDP packets, config uploads, and local credential handling.
 
 ```text
-packages/cli/src/     native Zig implementation
-packages/cli/test/    Vitest integration tests and fixtures
+packages/ec/src/      native Zig implementation
+packages/ec/test/     Vitest integration tests and fixtures
 examples/config/     example machine config
 tools/               shared build and lint tooling
 docs/                setup guides

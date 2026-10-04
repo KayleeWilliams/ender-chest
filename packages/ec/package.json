@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KayleeWilliams/ender-chest-cli.git",
-    "directory": "packages/cli"
+    "directory": "packages/ec"
   },
   "type": "module",
   "scripts": {

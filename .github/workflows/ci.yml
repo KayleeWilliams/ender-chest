@@ -48,7 +48,7 @@ jobs:
           ]
     defaults:
       run:
-        working-directory: packages/cli
+        working-directory: packages/ec
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -60,5 +60,5 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ec-${{ matrix.target }}
-          path: packages/cli/zig-out/bin/ec*
+          path: packages/ec/zig-out/bin/ec*
           if-no-files-found: error
