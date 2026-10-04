@@ -150,10 +150,7 @@ fn readManifestFile(c: *C, path: []const u8) ?Release {
 const Fetch = union(enum) { release: Release, none, failed };
 
 fn fetchRelease(c: *C) ?Fetch {
-    const token = githubToken(c) orelse {
-        c.log("No GitHub credentials for ec releases. Set GH_TOKEN or run gh auth login.", .{}) catch {};
-        return null;
-    };
+    const token = githubToken(c) orelse "";
     const slug = repoSlug(c);
     const release_url = c.fmt("https://api.github.com/repos/{s}/releases/latest", .{slug}) catch return null;
     const release_body = https(c, token, release_url, "application/vnd.github+json") orelse return .failed;
@@ -184,12 +181,12 @@ fn readAsset(c: *C, release: Release, asset: Asset) ?[]const u8 {
         return c.read(path) catch null;
     }
     if (asset.url.len == 0) return null;
-    const token = githubToken(c) orelse return null;
+    const token = githubToken(c) orelse "";
     return https(c, token, asset.url, "application/octet-stream");
 }
 
 fn https(c: *C, token: []const u8, url: []const u8, accept: []const u8) ?[]const u8 {
-    if (!validToken(token) or !c.commandExists("curl")) return null;
+    if ((token.len > 0 and !validToken(token)) or !c.commandExists("curl")) return null;
     var random: [8]u8 = undefined;
     std.Io.random(c.io, &random);
     const dir = c.fmt("{s}/.cache/ec", .{c.home}) catch return null;
@@ -198,12 +195,13 @@ fn https(c: *C, token: []const u8, url: []const u8, accept: []const u8) ?[]const
     const out = c.fmt("{s}/download-{x}", .{ dir, random }) catch return null;
     defer core.cwd().deleteFile(c.io, cfg) catch {};
     defer core.cwd().deleteFile(c.io, out) catch {};
-    const config = c.fmt("header = \"Authorization: Bearer {s}\"\nheader = \"Accept: {s}\"\nheader = \"User-Agent: ec\"\n", .{ token, accept }) catch return null;
+    const authorization = if (token.len > 0) c.fmt("header = \"Authorization: Bearer {s}\"\n", .{token}) catch return null else "";
+    const config = c.fmt("{s}header = \"Accept: {s}\"\nheader = \"User-Agent: ec\"\n", .{ authorization, accept }) catch return null;
     c.write(cfg, config, 0o600) catch return null;
     const result = c.capture(&.{ "curl", "-fsSL", "--retry", "3", "--max-time", "30", "--config", cfg, "-o", out, "--", url }, null, 45) catch return null;
     if (!core.success(result.term)) {
         const missing = std.mem.indexOf(u8, result.stderr, "404") != null;
-        if (missing) c.log("No ec release published yet.", .{}) catch {} else c.log("Could not reach GitHub releases.", .{}) catch {};
+        if (missing) c.log("No ec release found. Private releases require GitHub access.", .{}) catch {} else c.log("Could not reach GitHub releases.", .{}) catch {};
         return if (missing) "" else null;
     }
     return c.read(out) catch null;

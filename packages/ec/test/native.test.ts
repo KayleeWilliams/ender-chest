@@ -732,6 +732,76 @@ describe("native ec", () => {
     expect(r.stderr).toContain("checksum did not match");
     expect(existsSync(path.join(f.home, ".local/bin/ec"))).toBe(false);
   });
+  it("downloads and applies a public CLI release without GitHub credentials", () => {
+    const f = fixture();
+    const bytes =
+      "#!/bin/sh\nprintf '%s\\n' updated > \"$HOME/update-marker\"\n";
+    const name = `ec-${releaseAssetKey()}`;
+    write(
+      f.root,
+      "release.json",
+      JSON.stringify({
+        assets: [
+          {
+            name: "manifest.json",
+            url: "https://api.github.com/repos/example/ec/releases/assets/1",
+          },
+          {
+            name,
+            url: "https://api.github.com/repos/example/ec/releases/assets/2",
+          },
+        ],
+      })
+    );
+    write(
+      f.root,
+      "manifest.json",
+      JSON.stringify({
+        assets: {
+          [releaseAssetKey()]: {
+            name,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+          },
+        },
+        source_hash: "a".repeat(64),
+        version: "0.0.2",
+      })
+    );
+    write(f.root, "binary", bytes);
+    f.fake("gh", "process.exit(1);");
+    const env = f.fake(
+      "curl",
+      `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const config = fs.readFileSync(args[args.indexOf("--config") + 1], "utf-8");
+fs.appendFileSync(process.env.HOME + "/requests", config);
+const url = args.at(-1);
+const file = url.endsWith("/latest") ? "release.json" : url.endsWith("/1") ? "manifest.json" : "binary";
+fs.copyFileSync(process.env.TEST_RELEASE_DIR + "/" + file, args[args.indexOf("-o") + 1]);
+`
+    );
+    const r = f.run(["sync", "--skip-packages"], {
+      ...env,
+      EC_NO_UPDATE: "",
+      EC_RELEASE_MANIFEST: "",
+      EC_RELEASE_REPO: "example/ec",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+      TEST_RELEASE_DIR: f.root,
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(readFileSync(path.join(f.home, "update-marker"), "utf-8")).toBe(
+      "updated\n"
+    );
+    const requests = readFileSync(path.join(f.home, "requests"), "utf-8");
+    expect(requests).toContain("Accept: application/vnd.github+json");
+    expect(requests).toContain("Accept: application/octet-stream");
+    expect(requests).not.toContain("Authorization");
+    expect(readFileSync(path.join(f.home, ".local/bin/ec"), "utf-8")).toBe(
+      bytes
+    );
+  });
   it("numbers patch releases from 0.0.1", () => {
     const script = path.join(workspaceRoot, "tools/release-version.sh");
     const run = (arg?: string) =>

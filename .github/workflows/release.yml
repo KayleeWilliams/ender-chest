@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ec-release
+  cancel-in-progress: false
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -28,12 +31,13 @@ jobs:
         run: |
           set -eu
           echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
-          if tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName); then
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '[.[] | select(.draft == false and .prerelease == false)][0].tag_name // ""')
+          if [ -n "$tag" ]; then
             dir=$(mktemp -d)
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern manifest.json --dir "$dir"
-            published=$(python3 -c 'import json; print(json.load(open("'"$dir"'/manifest.json"))["source_hash"])')
-            if [ "$published" = "$SOURCE_HASH" ]; then
-              echo "ec $tag already matches this source."
+            published=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit", ""))' "$dir/manifest.json")
+            if [ "$published" = "$GITHUB_SHA" ]; then
+              echo "ec $tag already matches this commit."
               echo "version=" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -81,10 +85,27 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
       - uses: actions/download-artifact@v4
         with:
           pattern: ec-*
           path: dist
+      - name: Prepare and test the release packages
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          SOURCE_HASH: ${{ needs.plan.outputs.source_hash }}
+        run: |
+          set -eu
+          python3 tools/package-release.py --artifacts dist --output publish \
+            --version "$VERSION" --commit "$GITHUB_SHA" --source-hash "$SOURCE_HASH"
+          sh -n publish/install.sh
+          npm install --prefix "$RUNNER_TEMP/ec-npm" --offline --ignore-scripts --no-audit --no-fund "./publish/ender-chest-$VERSION.tgz"
+          "$RUNNER_TEMP/ec-npm/node_modules/.bin/ec" --version | grep -F "ec $VERSION "
       - name: Publish the patch release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -92,48 +113,8 @@ jobs:
           SOURCE_HASH: ${{ needs.plan.outputs.source_hash }}
         run: |
           set -eu
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib
-          keys = {
-              "ec-aarch64-macos": "aarch64-macos",
-              "ec-x86_64-macos": "x86_64-macos",
-              "ec-aarch64-linux": "aarch64-linux",
-              "ec-x86_64-linux": "x86_64-linux",
-          }
-          root = pathlib.Path("dist")
-          assets = {}
-          hashes = set()
-          for name, key in keys.items():
-              matches = [p for p in root.glob(f"**/{name}") if p.is_file()]
-              if len(matches) != 1:
-                  raise SystemExit(f"expected one {name}, found {matches}")
-              binary = matches[0]
-              data = binary.read_bytes()
-              digest = hashlib.sha256(data).hexdigest()
-              sidecar = binary.with_name(name + ".sha256").read_text().strip().split()[0]
-              if digest != sidecar:
-                  raise SystemExit(f"checksum mismatch for {name}")
-              source = binary.with_name("source_hash.txt").read_text().strip()
-              if source != os.environ["SOURCE_HASH"]:
-                  raise SystemExit(f"source hash mismatch for {name}")
-              hashes.add(source)
-              publish = pathlib.Path("publish")
-              publish.mkdir(parents=True, exist_ok=True)
-              (publish / name).write_bytes(data)
-              (publish / f"{name}.sha256").write_text(digest + "\n")
-              assets[key] = {"name": name, "sha256": digest}
-          if hashes != {os.environ["SOURCE_HASH"]}:
-              raise SystemExit("source hashes disagree")
-          manifest = {
-              "schema_version": 1,
-              "version": os.environ["VERSION"],
-              "commit": os.environ["GITHUB_SHA"],
-              "source_hash": os.environ["SOURCE_HASH"],
-              "assets": assets,
-          }
-          pathlib.Path("publish/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-          PY
           gh release create "v$VERSION" publish/* \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "ec $VERSION" \
             --notes "ec $VERSION"$'\n\n'"source $SOURCE_HASH"$'\n'"commit $GITHUB_SHA"
