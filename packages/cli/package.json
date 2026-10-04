@@ -1,0 +1,28 @@
+{
+  "name": "ender-chest",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sync development machine config and agent skills with a native CLI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KayleeWilliams/ender-chest-cli.git",
+    "directory": "packages/cli"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "../../tools/zig build -Doptimize=ReleaseSafe",
+    "dev": "pnpm build && ./zig-out/bin/ec",
+    "format": "../../tools/zig fmt build.zig src",
+    "lint": "../../tools/zig fmt --check build.zig src",
+    "test": "../../tools/zig build test",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "smol-toml": "1.8.0",
+    "typescript": "6.0.3"
+  }
+}

@@ -4,20 +4,19 @@
 
 The CLI is native Zig for macOS and Linux. Installed binaries need neither Node nor Zig. Git, curl, and SSH handle repository, HTTP, and remote operations.
 
-This repository is private while the standalone release is being prepared. The npm package name is `ender-chest`; no npm package has been published. The executable is `ec`.
-
 ## Install from source
 
 ```sh
 git clone https://github.com/KayleeWilliams/ender-chest-cli.git
 cd ender-chest-cli
-tools/zig build -Doptimize=ReleaseSafe
+pnpm install
+pnpm build
 mkdir -p ~/.local/bin
-install -m 755 zig-out/bin/ec ~/.local/bin/ec
+install -m 755 packages/cli/zig-out/bin/ec ~/.local/bin/ec
 ec --help
 ```
 
-Add `~/.local/bin` to your PATH. The build wrapper downloads Zig 0.16.0 when needed and verifies its pinned checksum. The first build needs Git, curl, tar, and xz. Node is used only for development tests.
+Add `~/.local/bin` to your PATH. The build wrapper downloads Zig 0.16.0 when needed and verifies its pinned checksum. The first build needs Git, curl, tar, and xz. Node and pnpm run the development tooling.
 
 The source launcher `./ec` builds and runs the CLI. It does not select this source repository as your config checkout.
 
@@ -37,7 +36,7 @@ ec sync --repo ~/my-machine-config --skip-packages
 ec verify
 ```
 
-Sync writes the managed home files, including shell and Git config. Back up existing files and merge any settings you want to keep into your config or the `.local` overrides first. This version uses the fixed managed-file list in `src/sync.zig`; it is an opinionated config layout.
+Sync writes the managed home files, including shell and Git config. Back up existing files and merge any settings you want to keep into your config or the `.local` overrides first. This version uses the fixed managed-file list in `packages/cli/src/sync.zig`; it is an opinionated config layout.
 
 `--skip-packages` avoids package installation and shell framework setup. Without it, sync may install Homebrew, packages from your Brewfiles, Oh My Zsh, shell plugins, and a Node version through fnm.
 
@@ -81,26 +80,38 @@ For automation, feed a token from a credential manager through stdin with `ec cl
 
 Sync applies the local token to Claude Code, Codex, and Grok settings. Those generated settings also contain credentials and must stay on-device. Push does not capture them. Without a local token, sync preserves existing agent authentication and explains how to configure the proxy.
 
-Existing clients migrate a token from their installed legacy `client.json` before sync replaces that file. The CLI never imports a token from the config checkout. See [migration](docs/migration.md) and [credential handling](SECURITY.md).
+See [credential handling](SECURITY.md) for storage and upload behavior.
 
 ## Updates
 
 CLI releases come from `KayleeWilliams/ender-chest-cli`, independently of your config remote. `EC_RELEASE_REPO=owner/repo` selects a fork's releases. While releases are private, downloads need `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login` on each device. These credentials stay local.
 
-For config-only repositories, sync checks for the latest CLI release, verifies its checksum, installs it, and resumes sync. Legacy combined source/config checkouts require a matching source hash and can rebuild locally. `EC_NO_UPDATE=1` disables release checks.
+Sync checks for the latest CLI release, verifies its checksum, installs it, and resumes. `EC_NO_UPDATE=1` disables release checks.
 
-Releases are manual during private preparation. The release workflow builds ARM64 and x86-64 binaries for macOS 13+ and Linux musl. Until a release is published, build from source on each machine.
+The manual release workflow builds ARM64 and x86-64 binaries for macOS 13+ and Linux musl.
 
 ## Development
 
+Use Node 24 and pnpm 11.25.0, pinned in the repository. Workspace commands run through Turborepo. Ultracite supplies Oxlint and Oxfmt, with the same custom anti-slop rules as Inth. Zig uses its native formatter.
+
 ```sh
-nub install
-nub run test
-nub exec tsc --noEmit
-tools/zig fmt --check build.zig src/*.zig
+pnpm install
+pnpm check
+pnpm format
+pnpm build
 ```
 
-`pnpm install --frozen-lockfile` and `pnpm test` work too. Native Zig tests cover parsing and orchestration. Vitest runs the compiled CLI in temporary homes and Git repos, including real HTTP requests, UDP packets, local pushes, and credential migration. CI runs tests on macOS and Linux, cross-compiles all release targets, and scans Git history for secrets.
+`pnpm check` runs lint, type checks, Vitest integration tests, and native Zig tests. The integration tests exercise the compiled CLI in temporary homes and Git repos, including HTTP requests, UDP packets, config uploads, and local credential handling.
+
+```text
+packages/cli/src/     native Zig implementation
+packages/cli/test/    Vitest integration tests and fixtures
+examples/config/     example machine config
+tools/               shared build and lint tooling
+docs/                setup guides
+```
+
+Run `pnpm --filter ender-chest <script>` to target the CLI package. `./ec` builds and runs it without requiring Node. CI checks the workspace on macOS and Linux, builds all four native targets, and scans Git history for secrets.
 
 [FX](https://github.com/vercel-labs/fx) informed the native binary and Zig test setup. [Inth](https://github.com/inthhq/inth/tree/main/packages/cli) informed grouped commands, scoped help, typed discovery, and stable errors. Ender Chest uses its own implementation.
 

@@ -8,6 +8,6 @@ Proxy tokens live in `~/.config/ender-chest/secrets/cliproxyapi.json`, mode `060
 
 Setup reads tokens from a hidden prompt or stdin. It never accepts tokens as CLI arguments. HTTP requests pass authentication to curl through stdin. `ec cliproxy run` places the token in the child process's environment, so only run programs you trust.
 
-The repository CI scans Git history with Gitleaks. Before changing visibility, also inspect examples, documentation, release artifacts, and any newly added files for private hostnames and personal information. A clean scanner result does not prove that every possible secret has been detected.
+The repository CI scans Git history with Gitleaks. Review examples, documentation, release artifacts, and new files for private hostnames and personal information. A clean scanner result does not prove that every possible secret has been detected.
 
 Do not include live credentials in issues, logs, screenshots, or test fixtures. Revoke or replace a credential if it was exposed. Deleting it from the latest commit does not invalidate copies in history.

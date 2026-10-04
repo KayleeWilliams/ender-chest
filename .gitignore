@@ -34,3 +34,7 @@ home/.cli-proxy-api/
 .local-ci-cache/
 dist/
 publish/
+
+# Workspace task output
+.turbo/
+coverage/

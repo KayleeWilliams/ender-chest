@@ -1,7 +1,9 @@
-# Ender Chest CLI
+# Ender Chest
 
-This repository is intended for public release. Keep credentials, private hostnames, device inventories, personal config, and imported Git history out of it. Use example.test domains, documentation IP ranges, and clearly fake tokens in tests.
+The native CLI lives in `packages/cli/src`. Its integration tests live in `packages/cli/test`. Shared tooling lives in `tools/`; example machine config lives in `examples/config`.
 
-The CLI lives in src/*.zig. Node is a development dependency only. Run `nub run test`, `nub exec tsc --noEmit`, and `tools/zig fmt --check build.zig src/*.zig` after implementation changes. Test sync using temporary homes and config checkouts. Do not apply examples to the developer's real home.
+Use pnpm and Turborepo for workspace commands. `pnpm check` runs Ultracite, Zig formatting checks, TypeScript checks, Vitest, and native Zig tests. `pnpm format` applies Oxfmt and Zig formatting. Keep the Oxlint anti-slop rules aligned with the shared Inth tooling.
 
-Proxy tokens belong in ~/.config/ender-chest/secrets/cliproxyapi.json, never the config checkout. Add regression tests for credential migration, setup, and upload exclusions when those paths change. The CLI release repository and the user's config repository are separate.
+Use temporary homes and config checkouts for tests. Do not apply examples to the developer's real home. Keep credentials, personal config, and private device details out of this repo. Use example.test domains, documentation IP ranges, and fake tokens in fixtures.
+
+Proxy tokens belong in `~/.config/ender-chest/secrets/cliproxyapi.json`. Generated agent settings also contain credentials and must stay on-device. Preserve regression coverage for credential setup, migration, and upload exclusions.

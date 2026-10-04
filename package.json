@@ -1,24 +1,30 @@
 {
-  "name": "ender-chest",
+  "name": "ender-chest-monorepo",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tools/zig build test && tools/zig build -Doptimize=ReleaseSafe && vitest run",
-    "test:unit": "tools/zig build test",
-    "test:integration": "tools/zig build -Doptimize=ReleaseSafe && vitest run src/native.test.ts src/cliproxy.test.ts src/credentials.test.ts",
-    "test:e2e": "tools/zig build -Doptimize=ReleaseSafe && vitest run src/native.test.ts",
-    "ec": "./ec"
+    "build": "turbo run build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test",
+    "dev": "turbo run dev",
+    "ec": "./ec",
+    "format": "ultracite fix . && turbo run format",
+    "lint": "ultracite check . && turbo run lint",
+    "lint:fix": "pnpm format",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:watch": "pnpm --filter ender-chest test:watch",
+    "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
-    "@types/node": "^24.3.0",
-    "typescript": "^5.9.2",
-    "vitest": "^3.2.4",
-    "smol-toml": "^1.8.0"
+    "@oxlint/plugins": "1.81.0",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0",
+    "turbo": "2.10.12",
+    "ultracite": "7.10.8",
+    "vitest": "5.0.0"
   },
-  "description": "Sync development machine config and agent skills with a native CLI.",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/KayleeWilliams/ender-chest-cli.git"
-  }
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "pnpm@11.25.0"
 }

@@ -1,42 +1,64 @@
-name: ec
+name: CI
+
 on: [push, pull_request]
+
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  check:
+    name: Lint, types, and tests on ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install archive tools on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
-      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          version: 10
-      - uses: actions/setup-node@v4
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
-          node-version: 24
-          cache: pnpm
+          cache: true
       - run: pnpm install --frozen-lockfile
-      - run: tools/zig fmt --check build.zig src/*.zig
-      - run: pnpm exec tsc --noEmit
-      - run: pnpm test
+      - run: pnpm check
   binaries:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        target: [aarch64-macos.13.0, x86_64-macos.13.0, aarch64-linux-musl, x86_64-linux-musl]
+        target:
+          [
+            aarch64-macos.13.0,
+            x86_64-macos.13.0,
+            aarch64-linux-musl,
+            x86_64-linux-musl,
+          ]
+    defaults:
+      run:
+        working-directory: packages/cli
     steps:
-      - uses: actions/checkout@v4
-      - name: Install archive tools on Linux
-        if: runner.os == 'Linux'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install archive tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
-      - run: tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - run: ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
       - run: cd zig-out/bin && sha256sum ec > ec.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ec-${{ matrix.target }}
-          path: zig-out/bin/ec*
+          path: packages/cli/zig-out/bin/ec*
+          if-no-files-found: error
