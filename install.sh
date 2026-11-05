@@ -5,7 +5,7 @@ main() (
   set -eu
 
   fail() { printf 'ec: %s\n' "$*" >&2; exit 1; }
-  repo=${EC_RELEASE_REPO:-KayleeWilliams/ender-chest-cli}
+  repo=${EC_RELEASE_REPO:-KayleeWilliams/ender-chest}
   version=${EC_VERSION:-}
   install_dir=${EC_INSTALL_DIR:-}
   while [ "$#" -gt 0 ]; do

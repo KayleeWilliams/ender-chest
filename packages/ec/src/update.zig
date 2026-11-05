@@ -6,7 +6,7 @@ const O = @import("options.zig").Options;
 const eq = core.eql;
 
 const day_seconds: i64 = 24 * 60 * 60;
-const default_repo = "KayleeWilliams/ender-chest-cli";
+const default_repo = "KayleeWilliams/ender-chest";
 
 pub const Plan = enum { current, download, local };
 

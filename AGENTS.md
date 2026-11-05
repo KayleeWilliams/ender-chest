@@ -7,3 +7,5 @@ Use pnpm and Turborepo for workspace commands. `pnpm check` runs Ultracite, Zig 
 Use temporary homes and config checkouts for tests. Do not apply examples to the developer's real home. Keep credentials, personal config, and private device details out of this repo. Use example.test domains, documentation IP ranges, and fake tokens in fixtures.
 
 Proxy tokens belong in `~/.config/ender-chest/secrets/cliproxyapi.json`. Generated agent settings also contain credentials and must stay on-device. Preserve regression coverage for credential setup, migration, and upload exclusions.
+
+This repo is public. Run `git config core.hooksPath .githooks` once per clone. The hooks run `tools/check-private.sh`, which blocks fixed strings listed in `~/.config/ender-chest/private-patterns` and runs Gitleaks. Never copy the pattern file into the repo or print its contents. When a new real hostname, address, account, or key appears, add it to that file and to the `PRIVATE_PATTERNS` Actions secret.

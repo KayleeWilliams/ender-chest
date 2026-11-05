@@ -11,7 +11,7 @@ The recommended installer downloads a native binary for macOS 13+ or Linux, on A
 The repository is currently private. With [GitHub CLI](https://cli.github.com/) authenticated to an account that has access, run:
 
 ```sh
-gh release download --repo KayleeWilliams/ender-chest-cli --pattern install.sh --output - | sh
+gh release download --repo KayleeWilliams/ender-chest --pattern install.sh --output - | sh
 export PATH="$HOME/.local/bin:$PATH"
 ec --help
 ```
@@ -19,7 +19,7 @@ ec --help
 Once the repository is public, users can install with curl:
 
 ```sh
-curl -fsSL https://github.com/KayleeWilliams/ender-chest-cli/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/KayleeWilliams/ender-chest/releases/latest/download/install.sh | sh
 ```
 
 Add the PATH line to your shell profile if needed. The installer leaves shell profiles and machine config untouched. It uses `sha256sum` or `shasum` for verification. A failed download or checksum leaves the existing binary in place.
@@ -27,7 +27,7 @@ Add the PATH line to your shell profile if needed. The installer leaves shell pr
 Pass `--version 0.0.1` to pin a release or `--install-dir /your/bin` to choose a destination. Append these options to `sh -s --`:
 
 ```sh
-gh release download --repo KayleeWilliams/ender-chest-cli --pattern install.sh --output - \
+gh release download --repo KayleeWilliams/ender-chest --pattern install.sh --output - \
   | sh -s -- --version 0.0.1 --install-dir "$HOME/.local/bin"
 ```
 
@@ -35,10 +35,10 @@ gh release download --repo KayleeWilliams/ender-chest-cli --pattern install.sh -
 
 ### npm
 
-Each [release](https://github.com/KayleeWilliams/ender-chest-cli/releases) also includes an npm tarball with all four native binaries. It requires Node 20+ and runs without install scripts or additional downloads:
+Each [release](https://github.com/KayleeWilliams/ender-chest/releases) also includes an npm tarball with all four native binaries. It requires Node 20+ and runs without install scripts or additional downloads:
 
 ```sh
-gh release download v0.0.1 --repo KayleeWilliams/ender-chest-cli --pattern ender-chest-0.0.1.tgz
+gh release download v0.0.1 --repo KayleeWilliams/ender-chest --pattern ender-chest-0.0.1.tgz
 npm install --global ./ender-chest-0.0.1.tgz
 ec --help
 ```
@@ -50,8 +50,8 @@ The package is prepared as `ender-chest`, with the command `ec`. It has not been
 Clone the examples and copy the starter to a separate directory:
 
 ```sh
-git clone --depth 1 https://github.com/KayleeWilliams/ender-chest-cli.git ~/ender-chest-cli
-cp -R ~/ender-chest-cli/examples/config ~/my-machine-config
+git clone --depth 1 https://github.com/KayleeWilliams/ender-chest.git ~/ender-chest
+cp -R ~/ender-chest/examples/config ~/my-machine-config
 git -C ~/my-machine-config init
 ```
 
@@ -112,7 +112,7 @@ See [credential handling](SECURITY.md) for storage and upload behavior.
 
 ## Updates
 
-CLI releases come from `KayleeWilliams/ender-chest-cli`, independently of your config remote. `EC_RELEASE_REPO=owner/repo` selects a fork's releases. While releases are private, downloads need `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login` on each device. These credentials stay local.
+CLI releases come from `KayleeWilliams/ender-chest`, independently of your config remote. `EC_RELEASE_REPO=owner/repo` selects a fork's releases. While releases are private, downloads need `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login` on each device. These credentials stay local.
 
 Sync checks for the latest CLI release, verifies its checksum, installs it in `~/.local/bin/ec`, and resumes. `EC_NO_UPDATE=1` disables release checks. Public release checks need no GitHub credentials.
 
@@ -125,9 +125,10 @@ The manual release workflow builds ARM64 and x86-64 binaries for macOS 13+ and L
 Use Node 24 and pnpm 11.25.0, pinned in the repository. Workspace commands run through Turborepo. Ultracite supplies Oxlint and Oxfmt, with the same custom anti-slop rules as Inth. Zig uses its native formatter.
 
 ```sh
-git clone https://github.com/KayleeWilliams/ender-chest-cli.git
-cd ender-chest-cli
+git clone https://github.com/KayleeWilliams/ender-chest.git
+cd ender-chest
 pnpm install
+git config core.hooksPath .githooks
 pnpm check
 pnpm format
 pnpm build
@@ -139,6 +140,8 @@ The source launcher `./ec` builds and runs the CLI. The build wrapper downloads 
 mkdir -p ~/.local/bin
 install -m 755 packages/ec/zig-out/bin/ec ~/.local/bin/ec
 ```
+
+The hooks in `.githooks` run `tools/check-private.sh` before each commit and push. It runs Gitleaks when installed, and blocks any fixed string listed in `~/.config/ender-chest/private-patterns`. Use that file for your own hostnames, addresses, and keys; it stays outside the repo.
 
 `pnpm check` runs lint, type checks, Vitest integration tests, and native Zig tests. The integration tests exercise the compiled CLI in temporary homes and Git repos, including HTTP requests, UDP packets, config uploads, and local credential handling.
 
