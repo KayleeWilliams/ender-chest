@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -65,33 +65,28 @@ export const write = (root: string, rel: string, body: string): string => {
   return dest;
 };
 
-export const writeSourceRepo = (repo: string): void => {
-  for (const [rel, asset] of [
-    [".local/bin/cliproxy", "cliproxy"],
-    [".local/bin/desktop", "desktop"],
-    [".local/lib/desktop/unlock-wallet.py", "unlock-wallet.py"],
-  ]) {
-    write(
-      repo,
-      `home/${rel}`,
-      readFileSync(new URL(`assets/${asset}`, import.meta.url), "utf-8")
-    );
-  }
-  write(
-    repo,
-    "home/.config/desktop/config.json",
-    JSON.stringify({
-      host: "desktop.test",
-      mac: "02:00:00:00:00:01",
-      relay: "relay.test",
-      sshUser: "user",
-    })
-  );
-  write(
-    repo,
-    "home/.config/cliproxyapi/client.json",
-    JSON.stringify({ baseURL: "http://proxy.test:8317" })
-  );
+// The home files the test config repo manages. `once` files are created when missing and
+// then left to the machine.
+export const sourceManifest = `files = [
+  ".gitconfig",
+  ".zshrc",
+  ".zprofile",
+  ".config/git/ignore",
+  { path = ".config/shell/macos.zsh", profiles = ["mac"] },
+  { path = ".config/shell/macos.zprofile", profiles = ["mac"] },
+  { path = ".config/zed/settings.json", profiles = ["mac"] },
+  { path = ".ssh/config", mode = "600" },
+  { path = ".gitconfig.local", from = "git/gitconfig.local.example", once = true },
+  { path = ".config/git/identity.work", from = "git/identity.work.example", once = true },
+  { path = ".zshrc.local", from = "shell/zshrc.local.example", once = true },
+  { path = ".zprofile.local", once = true },
+  { path = ".ssh/config.local", from = "tools/ssh/config.local.example", mode = "600", once = true },
+]
+`;
+
+// `extra` is appended to ender-chest.toml, for [plugins.*] or [[setup]] tables.
+export const writeSourceRepo = (repo: string, extra = ""): void => {
+  write(repo, "ender-chest.toml", `${sourceManifest}${extra}`);
   write(
     repo,
     "home/.gitconfig",
@@ -124,11 +119,6 @@ export const writeSourceRepo = (repo: string): void => {
   );
   write(repo, "agents/codex/config.toml", 'model = "gpt-5.6-sol"\n');
   write(repo, "agents/grok/config.toml", "[cli]\nauto_update = true\n");
-  write(
-    repo,
-    "agents/shared/mcp.toml",
-    '[mcp_servers.executor]\nurl = "https://example.test/mcp"\n'
-  );
   write(repo, "git/gitconfig.local.example", "# local git\n");
   write(repo, "git/identity.work.example", "# work\n");
   write(repo, "shell/zshrc.local.example", "# zshrc local\n");
@@ -178,4 +168,48 @@ export const harvestNative = (opts: Options): void => {
   if (result.status !== 0) {
     throw new Error(result.stdout + result.stderr);
   }
+};
+
+export const ec = path.join(cliRoot, "zig-out/bin/ec");
+
+// A config checkout whose ender-chest.toml enables plugins, with a temporary HOME.
+// `fake` puts a stand-in command first on PATH; `secret` stores a value with ec secret set.
+export const pluginFixture = (config: string) => {
+  const root = mkdtempSync(path.join(tmpdir(), "ec-plugin-"));
+  const repo = path.join(root, "repo");
+  const home = path.join(root, "home");
+  mkdirSync(home, { recursive: true });
+  write(repo, "ender-chest.toml", config);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    EC_JSON: undefined,
+    EC_NO_UPDATE: "1",
+    EC_PLUGIN_SETTINGS: undefined,
+    EC_REPO: repo,
+    HOME: home,
+  };
+  const run = (args: string[], overrides: NodeJS.ProcessEnv = {}) =>
+    spawnSync(ec, args, {
+      cwd: root,
+      encoding: "utf-8",
+      env: { ...env, ...overrides },
+      timeout: 15_000,
+    });
+  const fake = (name: string, code: string) => {
+    const file = write(home, `bin/${name}`, `#!${process.execPath}\n${code}\n`);
+    chmodSync(file, 0o755);
+    return { PATH: `${path.dirname(file)}:/usr/bin:/bin` };
+  };
+  const secret = (name: string, value: string) => {
+    const r = spawnSync(ec, ["secret", "set", name], {
+      encoding: "utf-8",
+      env,
+      input: value,
+    });
+    if (r.status !== 0) {
+      throw new Error(r.stdout + r.stderr);
+    }
+  };
+  const configure = (text: string) => write(repo, "ender-chest.toml", text);
+  return { configure, env, fake, home, repo, root, run, secret };
 };

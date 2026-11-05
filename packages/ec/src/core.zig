@@ -192,6 +192,20 @@ pub fn array(v: Value, key: []const u8) []Value {
     const field = v.object.get(key) orelse return &.{};
     return if (field == .array) field.array.items else &.{};
 }
+// An SSH host, or USER@HOST when `user` is set. Rejects leading dashes and shell syntax, since
+// hosts reach ssh's argv.
+pub fn validHost(s: []const u8, user: bool) bool {
+    var parts = std.mem.splitScalar(u8, s, '@');
+    const first = parts.next().?;
+    if (parts.next()) |host| {
+        if (!user or parts.next() != null or first.len == 0 or (!std.ascii.isAlphanumeric(first[0]) and first[0] != '_')) return false;
+        for (first) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.' and ch != '-') return false;
+        return validHost(host, false);
+    }
+    if (s.len == 0 or !std.ascii.isAlphanumeric(s[0])) return false;
+    for (s) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.' and ch != '-') return false;
+    return true;
+}
 pub fn safeName(name: []const u8) bool {
     if (name.len == 0 or name[0] == '.' or name[0] == '-') return false;
     for (name) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_' and ch != '.') return false;

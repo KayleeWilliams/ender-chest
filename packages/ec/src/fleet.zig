@@ -30,7 +30,7 @@ pub fn run(c: *C, o: O) !bool {
     const expected = try latest(c);
     const machines = try discover(c);
     for (machines) |*m| try probe(c, m, expected);
-    if (o.action == .sync) {
+    if (core.eql(u8, o.action, "sync")) {
         var failed: usize = 0;
         var synced: usize = 0;
         for (machines) |*m| {
@@ -75,7 +75,7 @@ fn latest(c: *C) !Expected {
     return expected;
 }
 
-fn tailscale(c: *C) ![]const u8 {
+pub fn tailscale(c: *C) ![]const u8 {
     if (c.commandExists("tailscale")) return "tailscale";
     const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
     if (c.exists(app)) return app;
@@ -117,7 +117,7 @@ fn machine(v: core.Value, here: bool) ?Machine {
     if (!eq(u8, os, "macOS") and !eq(u8, os, "linux")) return null;
     const dns = core.string(v, "DNSName") orelse return null;
     const host = std.mem.trimEnd(u8, dns, ".");
-    if (!@import("desktop.zig").validHost(host, false)) return null;
+    if (!core.validHost(host, false)) return null;
     // The DNS label is ASCII and matches tailscale status; HostName can hold typographic quotes.
     const name = std.mem.sliceTo(host, '.');
     const online = if (v.object.get("Online")) |field| field == .bool and field.bool else false;

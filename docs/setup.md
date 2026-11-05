@@ -6,9 +6,9 @@ Install `ec`, clone your config repo, and run `ec sync --repo PATH --skip-packag
 
 Edit the example before applying it. The [starter guide](../examples/config/README.md) maps each source file to its installed location and explains which preferences merge or only seed a missing config. Shared agent instructions live in `agents/shared/AGENTS.md`; sync installs them as Claude's `CLAUDE.md` and Codex/Grok's `AGENTS.md`. The separate [project example](../examples/project/README.md) shows instructions for a codebase.
 
-`home/` paths map directly to your home directory for the CLI's supported file list. Add portable preferences under `agents/claude`, `agents/codex`, and `agents/grok`. Leave tokens, account sessions, project trust, and device-only settings out of those templates.
+`ender-chest.toml` lists the home files sync applies; each `home/<path>` maps to `~/<path>`. It also lists Brewfiles, setup steps, and plugins. The [README](../README.md#ender-chesttoml) describes each key. Add portable preferences under `agents/claude`, `agents/codex`, and `agents/grok`. Leave tokens, account sessions, project trust, and device-only settings out of those templates.
 
-The optional `agents/shared/mcp.toml` can define `[mcp_servers.executor]` with an HTTP `url`. Leave it empty if you do not use that server. Skill sources belong in `skills/manifest.json`:
+To share an MCP server or a model provider with every agent, enable a [plugin](plugins.md) such as `executor` or `cliproxyapi`. Skill sources belong in `skills/manifest.json`:
 
 ```json
 {
@@ -53,39 +53,56 @@ On Linux, install and manage CLIProxyAPI using its upstream instructions. Client
 
 ## Connect a client
 
-Put your endpoint, without `/v1`, in your private config repo:
+Enable the plugin in your private config repo's `ender-chest.toml`, with your endpoint and without `/v1`:
 
-```json
-{ "baseURL": "https://proxy.example.test:8317" }
+```toml
+[plugins.cliproxyapi]
+url = "https://proxy.example.test:8317"
+key = { secret = "cliproxyapi" }
 ```
 
-The path is `home/.config/cliproxyapi/client.json`. Replace the example hostname with your real one. Then, on each device:
+Replace the example hostname with your real one. Then, on each device:
 
 ```sh
+ec secret set cliproxyapi
 ec sync --skip-packages
-ec cliproxy setup
-ec sync --skip-packages
-ec cliproxy models
+ec cliproxyapi models
 ```
 
-Enter a token accepted by the proxy. Setup saves it locally without contacting the server; `models` verifies authentication. If your server supports multiple client keys, assigning one to each device makes revocation easier.
+Enter a token accepted by the proxy. `ec secret set` saves it locally without contacting the server; `models` verifies authentication. If your server supports multiple client keys, assigning one to each device makes revocation easier.
 
-Sync writes the endpoint and local token into agent settings. Open a new agent session afterwards. Programs that use OpenAI-compatible environment variables can run through `ec cliproxy run PROGRAM`. Applications with independent config directories need their own setup.
+Sync writes the endpoint and local token into agent settings. Open a new agent session afterwards. Programs that use OpenAI-compatible environment variables can run through `ec cliproxyapi run PROGRAM`. Applications with independent config directories need their own setup.
 
-To replace a token, first add its replacement on the host, run setup and sync on each affected client, verify `models`, then retire the old token on the host. Token changes never travel through Git.
+To replace a token, first add its replacement on the host, run `ec secret set cliproxyapi` and sync on each affected client, verify `models`, then retire the old token on the host. Token changes never travel through Git.
 
-`ec cliproxy restart` currently expects a macOS launch agent named `io.cliproxyapi`. It is not a generic service manager. For the Homebrew setup above, use `brew services restart cliproxyapi` on the host instead. Do not run both services on the same port.
+`ec cliproxyapi restart` expects a macOS launch agent named `io.cliproxyapi` on the host. From other machines it runs the same command on the host over SSH. It is not a generic service manager. For the Homebrew setup above, use `brew services restart cliproxyapi` on the host instead. Do not run both services on the same port.
 
-## Fleet and desktop commands
+## Fleet
 
 Fleet uses `tailscale status` to discover your account's macOS and Linux devices. Enable Remote Login on Macs, or SSH/Tailscale SSH on Linux. Connect over SSH once to verify host keys. `ec fleet` checks versions; `ec fleet sync` invokes sync on reachable devices that are behind. Each remote uses its own credentials and config checkout. There is no required central secrets server.
 
-For desktop commands, edit `home/.config/desktop/config.json` with your host, SSH user, MAC address, LAN broadcast address, and optional always-on relay. Enable Wake-on-LAN in firmware and the operating system. The relay must have `ec`, SSH access, and access to the desktop's LAN.
+## Wake and shut down a desktop
 
-```sh
-ec desktop start --no-auth
-ec desktop status
-ec desktop stop
+The `wol` plugin wakes a machine, and the `kde` plugin unlocks its wallet and shuts it down. Enable Wake-on-LAN in firmware and the operating system, then add your values:
+
+```toml
+[plugins.wol]
+mac = "00:00:5e:00:53:01"
+broadcast = "192.0.2.255"
+host = "desktop.example.test"
+relay = "user@relay.example.test"
+after_wake = "kde unlock --wait"
+
+[plugins.kde]
+host = "user@desktop.example.test"
 ```
 
-Shutdown uses KDE. Optional wallet unlock requires KWallet 6.29+, Python 3, and `python-dbus` on the desktop. Run `ec desktop auth --setup` from a Mac to store its password in that Mac's Keychain. Passwords and SSH private keys stay on-device.
+On the machine's LAN, `ec wol wake` sends the packet directly. Elsewhere it asks the relay over SSH, so the relay needs `ec`, this config, and access to the desktop's LAN.
+
+```sh
+ec wol wake
+ec wol status
+ec kde shutdown
+```
+
+Shutdown uses KDE. Wallet unlock requires KWallet 6.29+, Python 3, and `python-dbus` on the desktop; `ec` sends its helper over SSH. Run `ec kde unlock --setup` from a Mac to store the wallet password in that Mac's Keychain. Passwords and SSH private keys stay on-device.

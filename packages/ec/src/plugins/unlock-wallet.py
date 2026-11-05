@@ -2,6 +2,9 @@
 
 Passwords arrive on stdin or through getpass, never argv or the environment.
 Requires Linux, python-dbus, and KWallet 6.29's PAM instance replacement.
+
+ec embeds this file and runs it over SSH as `python3 -c LOADER`, which reads a
+length line and this script from stdin, then leaves the password on stdin.
 """
 import fcntl
 import getpass
@@ -62,7 +65,7 @@ def pam_launch(password, salt, runtime, env):
                 if b"Wallet opened by PAM" in output:
                     return proc
                 if b"Wallet failed to get opened by PAM" in output:
-                    raise RuntimeError("Wallet password was rejected. Run desktop auth --setup on your Mac to replace it.")
+                    raise RuntimeError("Wallet password was rejected. Run ec kde unlock --setup on your Mac to replace it.")
                 if proc.poll() is not None:
                     raise RuntimeError("KDE's wallet service exited before unlocking.")
                 time.sleep(0.05)

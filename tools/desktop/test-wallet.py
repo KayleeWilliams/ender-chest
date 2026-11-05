@@ -16,7 +16,7 @@ import dbus
 if os.environ.get("DESKTOP_WALLET_TEST") != "isolated":
     raise SystemExit("Use the isolated test command in tools/desktop/README.md.")
 
-helper = Path(__file__).resolve().parents[2] / "examples/config/home/.local/lib/desktop/unlock-wallet.py"
+helper = Path(__file__).resolve().parents[2] / "packages/ec/src/plugins/unlock-wallet.py"
 spec = importlib.util.spec_from_file_location("wallet_helper", helper)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

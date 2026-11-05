@@ -7,6 +7,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -64,24 +65,27 @@ const starter = () => {
   return { home, repo, run, sync };
 };
 
+// Uncomments one of the example [plugins.NAME] blocks in ender-chest.toml.
+const enable = (repo: string, name: string) => {
+  const file = path.join(repo, "ender-chest.toml");
+  const lines = readFileSync(file, "utf-8").split("\n");
+  const start = lines.indexOf(`# [plugins.${name}]`);
+  expect(start).toBeGreaterThan(-1);
+  for (let i = start; i < lines.length && lines[i]?.startsWith("# "); i += 1) {
+    lines[i] = lines[i]?.slice(2) ?? "";
+  }
+  writeFileSync(file, lines.join("\n"));
+};
+
 describe("config starter", () => {
   it.each([false, true])(
-    "installs the shipped instructions, preferences, and skill with local proxy setup=%s",
+    "installs the shipped instructions, preferences, and skill with the proxy plugin=%s",
     (withProxy) => {
       const f = starter();
       const token = "fixture-example-device-token";
       if (withProxy) {
-        const setup = f.run(
-          [
-            "cliproxy",
-            "setup",
-            "--url",
-            "https://proxy.example.test:8317",
-            "--key-stdin",
-            "--json",
-          ],
-          `${token}\n`
-        );
+        enable(f.repo, "cliproxyapi");
+        const setup = f.run(["secret", "set", "cliproxyapi", "--json"], token);
         expect(setup.status, setup.stderr).toBe(0);
         expect(setup.stdout + setup.stderr).not.toContain(token);
       }
@@ -141,7 +145,7 @@ describe("config starter", () => {
       expect(grok).not.toHaveProperty("mcp_servers.executor");
       const secret = path.join(
         f.home,
-        ".config/ender-chest/secrets/cliproxyapi.json"
+        ".config/ender-chest/secrets/cliproxyapi"
       );
       if (withProxy) {
         expect(claude.env.ANTHROPIC_AUTH_TOKEN).toBe(token);
@@ -163,13 +167,8 @@ describe("config starter", () => {
       expect(captured.status, captured.stdout + captured.stderr).toBe(0);
       expect(captured.stdout + captured.stderr).not.toContain(token);
       expect(
-        JSON.parse(
-          readFileSync(
-            path.join(f.repo, "home/.config/cliproxyapi/client.json"),
-            "utf-8"
-          )
-        )
-      ).toEqual({ baseURL: "https://proxy.example.test:8317" });
+        spawnSync("git", ["grep", "-I", token], { cwd: f.repo }).status
+      ).toBe(1);
       for (const rel of [
         "home/.config/ender-chest/secrets",
         "home/.claude",
@@ -237,5 +236,39 @@ describe("config starter", () => {
         false
       );
     }
+  });
+
+  it("lists every built-in plugin example with valid settings", () => {
+    const f = starter();
+    const names = ["cliproxyapi", "executor", "kde", "quiet", "wol"];
+    for (const name of names) {
+      enable(f.repo, name);
+    }
+    const r = f.run(["plugin", "list", "--json"]);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    // SAFETY: ec plugin list --json reports each plugin's name and missing settings.
+    const plugins = JSON.parse(r.stdout).data.plugins as {
+      name: string;
+      missing: string[];
+    }[];
+    expect(plugins.map((p) => p.name)).toEqual(names);
+    // Only the secrets, which each machine stores with ec secret set, are missing.
+    expect(plugins.flatMap((p) => p.missing)).toEqual(["key", "key"]);
+  });
+
+  it("creates the local overrides once and skips setup steps with --skip-packages", () => {
+    const f = starter();
+    f.sync();
+    for (const rel of [
+      ".gitconfig.local",
+      ".config/git/identity.work",
+      ".zshrc.local",
+      ".zprofile.local",
+      ".ssh/config.local",
+    ]) {
+      expect(existsSync(path.join(f.home, rel)), rel).toBe(true);
+    }
+    expect(filePermissions(path.join(f.home, ".ssh/config.local"))).toBe(0o600);
+    expect(existsSync(path.join(f.home, ".oh-my-zsh"))).toBe(false);
   });
 });

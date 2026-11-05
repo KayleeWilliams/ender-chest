@@ -1,8 +1,9 @@
 const std = @import("std");
 const core = @import("core.zig");
 const Options = @import("options.zig").Options;
+const plugin = @import("plugin.zig");
 
-const Option = struct {
+pub const Option = struct {
     name: []const u8,
     type: enum { boolean, string } = .boolean,
     description: []const u8,
@@ -10,9 +11,11 @@ const Option = struct {
     default: ?[]const u8 = null,
     required: bool = false,
 };
-const Definition = struct {
+pub const Definition = struct {
     command: []const u8,
     action: []const u8 = "",
+    // Set for plugin commands: "built-in", a config repo path, or owner/repo#ref.
+    plugin: ?[]const u8 = null,
     usage: []const u8,
     description: []const u8,
     options: []const Option,
@@ -25,7 +28,7 @@ const common = [_]Option{
 };
 const config = [_]Option{
     .{ .name = "repo", .type = .string, .description = "Config checkout path.", .default = "EC_REPO, current or saved checkout; linked worktrees use the primary checkout" },
-    .{ .name = "profile", .type = .string, .description = "Override the detected machine profile.", .values = &.{ "mac", "cloud" }, .default = "detected" },
+    .{ .name = "profile", .type = .string, .description = "Override the detected machine profile. ender-chest.toml filters files and steps by profile name.", .default = "mac on macOS, cloud in CI, containers, and Linux" },
 };
 const definitions = [_]Definition{
     .{
@@ -36,7 +39,7 @@ const definitions = [_]Definition{
             .{ .name = "skip-packages", .description = "Skip package installs and shell setup." },
             .{ .name = "update-skills", .description = "Refresh third-party skills from their Git repositories." },
         } ++ common),
-        .effects = &.{ "Writes managed home files, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "When Zig sources change, installs the matching GitHub release, or rebuilds with Zig if that download fails. EC_NO_UPDATE=1 skips the release check. Desktop commands do not check.", "Installs packages unless --skip-packages is set." },
+        .effects = &.{ "Applies the files, packages, setup steps, and plugins listed in ender-chest.toml, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "When Zig sources change, installs the matching GitHub release, or rebuilds with Zig if that download fails. EC_NO_UPDATE=1 skips the release check. Plugin commands do not check.", "Installs packages unless --skip-packages is set." },
         .examples = &.{ "ec sync", "ec sync --skip-packages", "ec sync --repo ~/dev/ender-chest --profile cloud --json" },
     },
     .{
@@ -54,53 +57,6 @@ const definitions = [_]Definition{
         .options = &(config ++ common),
         .effects = &.{"Reads local files only. Missing files or broken links return exit code 1."},
         .examples = &.{ "ec verify", "ec verify --json" },
-    },
-    .{
-        .command = "desktop",
-        .action = "start",
-        .usage = "ec desktop start [--local | --via USER@HOST] [--no-wait] [--no-auth] [options]",
-        .description = "Wake the desktop, wait for it, and unlock its wallet.",
-        .options = &([_]Option{
-            .{ .name = "local", .description = "Send a wake packet directly on the home LAN. Cannot combine with --via." },
-            .{ .name = "via", .type = .string, .description = "SSH relay hostname or USER@HOST. Cannot combine with --local.", .default = "direct on the home LAN, else DESKTOP_RELAY, then configured relay" },
-            .{ .name = "no-wait", .description = "Send the wake packet and exit without waiting or unlocking." },
-            .{ .name = "no-auth", .description = "Wait for the desktop but leave its wallet locked." },
-        } ++ common),
-        .effects = &.{ "Skips the wake packet when the desktop already responds. On the home LAN, sends it directly; elsewhere, through the SSH relay.", "Waits up to waitSeconds (default 180) for the desktop, then runs ec desktop auth on macOS.", "Settings: ~/.config/desktop/config.json. Override with DESKTOP_CONFIG.", "The relay needs Remote Login and a current ec. Unreachable after the wait returns exit code 1." },
-        .examples = &.{ "ec desktop start", "ec desktop start --no-auth", "ec desktop start --local --no-wait", "ec desktop start --via user@mac --json" },
-    },
-    .{
-        .command = "desktop",
-        .action = "stop",
-        .usage = "ec desktop stop [--no-wait] [options]",
-        .description = "Shut the desktop down through KDE.",
-        .options = &([_]Option{
-            .{ .name = "no-wait", .description = "Request shutdown and exit without waiting for the desktop to go offline." },
-        } ++ common),
-        .effects = &.{ "Asks KDE over SSH to log out and shut down, as the Plasma menu does. Apps can still block logout.", "Waits up to waitSeconds (default 180) for the desktop to stop responding.", "Settings: ~/.config/desktop/config.json. Override with DESKTOP_CONFIG." },
-        .examples = &.{ "ec desktop stop", "ec desktop stop --no-wait --json" },
-    },
-    .{
-        .command = "desktop",
-        .action = "status",
-        .usage = "ec desktop status [options]",
-        .description = "Check desktop reachability over Tailscale.",
-        .options = &common,
-        .effects = &.{ "Pings the configured host. Reports reachability, not power state. Unreachable returns exit code 1.", "Settings: ~/.config/desktop/config.json. Override with DESKTOP_CONFIG." },
-        .examples = &.{ "ec desktop status", "ec desktop status --json" },
-    },
-    .{
-        .command = "desktop",
-        .action = "auth",
-        .usage = "ec desktop auth [--setup | --forget | --local] [options]",
-        .description = "Unlock the desktop wallet using macOS Keychain.",
-        .options = &([_]Option{
-            .{ .name = "setup", .description = "Confirm SSH access and save the wallet password in this Mac's Keychain." },
-            .{ .name = "forget", .description = "Remove the wallet password saved on this Mac." },
-            .{ .name = "local", .description = "Prompt for the wallet password on Linux." },
-        } ++ common),
-        .effects = &.{ "Unlocks KWallet over SSH using the saved password. macOS may show a Keychain access dialog.", "Use only one of --setup, --forget, or --local. Setup and local unlock require an interactive terminal and refuse --json.", "Settings: ~/.config/desktop/config.json. Override with DESKTOP_CONFIG." },
-        .examples = &.{ "ec desktop auth --setup", "ec desktop auth --json", "ec desktop auth --forget", "ec desktop auth --local" },
     },
     .{
         .command = "fleet",
@@ -121,52 +77,49 @@ const definitions = [_]Definition{
         .examples = &.{ "ec fleet sync", "ec fleet sync --json" },
     },
     .{
-        .command = "cliproxy",
-        .action = "setup",
-        .usage = "ec cliproxy setup [--url URL] [--key-stdin] [options]",
-        .description = "Save a proxy token on this device, outside the config checkout.",
-        .options = &([_]Option{
-            .{ .name = "url", .type = .string, .description = "Proxy endpoint without /v1.", .default = "local client.json baseURL" },
-            .{ .name = "key-stdin", .description = "Read the token from stdin instead of a hidden terminal prompt." },
-        } ++ common),
-        .effects = &.{ "Writes the endpoint to ~/.config/cliproxyapi/client.json and the token to ~/.config/ender-chest/secrets/cliproxyapi.json with mode 0600.", "Never writes to the config checkout or contacts the proxy. Run ec sync afterwards to update agent settings.", "JSON mode requires --key-stdin. Tokens are never accepted as command-line arguments." },
-        .examples = &.{ "ec cliproxy setup --url https://proxy.example.test:8317", "ec cliproxy setup" },
+        .command = "plugin",
+        .action = "list",
+        .usage = "ec plugin list [options]",
+        .description = "Show enabled plugins, their sources, and their commands.",
+        .options = &([_]Option{config[0]} ++ common),
+        .effects = &.{ "Reads ender-chest.toml and installed plugins. Makes no changes.", "Notes settings and secrets that a plugin still needs." },
+        .examples = &.{ "ec plugin list", "ec plugin list --json" },
     },
     .{
-        .command = "cliproxy",
-        .action = "url",
-        .usage = "ec cliproxy url [options]",
-        .description = "Print the OpenAI-compatible base URL.",
+        .command = "plugin",
+        .action = "update",
+        .usage = "ec plugin update NAME [options]",
+        .description = "Move a GitHub plugin to the newest commit of its ref.",
+        .options = &([_]Option{config[0]} ++ common),
+        .effects = &.{ "Fetches the plugin, records the commit in ender-chest.lock, and prints a GitHub compare link.", "Review the changes, then commit the lock file. Other machines use the new commit after ec sync." },
+        .examples = &.{ "ec plugin update backup", "ec plugin update backup --json" },
+    },
+    .{
+        .command = "secret",
+        .action = "set",
+        .usage = "ec secret set NAME [options]",
+        .description = "Save a secret on this machine for plugin settings to use.",
         .options = &common,
-        .effects = &.{ "Reads ~/.config/cliproxyapi/client.json. CLIPROXY_BASE_URL overrides the host for ec cliproxy only.", "Makes no network requests." },
-        .examples = &.{ "ec cliproxy url", "ec cliproxy url --json" },
+        .effects = &.{ "Reads the value from a hidden prompt, or from stdin when piped. Never from arguments.", "Writes ~/.config/ender-chest/secrets/NAME with mode 0600. Reference it as { secret = \"NAME\" }. Run ec sync afterwards to update agent settings." },
+        .examples = &.{ "ec secret set executor", "printf %s \"$TOKEN\" | ec secret set executor --json" },
     },
     .{
-        .command = "cliproxy",
-        .action = "models",
-        .usage = "ec cliproxy models [options]",
-        .description = "List the models CLIProxyAPI serves.",
+        .command = "secret",
+        .action = "list",
+        .usage = "ec secret list [options]",
+        .description = "List the names of secrets saved on this machine.",
         .options = &common,
-        .effects = &.{ "Requests /v1/models with the local client key, sent to curl on stdin.", "An unreachable host, a rejected key, or another HTTP error returns exit code 1." },
-        .examples = &.{ "ec cliproxy models", "ec cliproxy models --json" },
+        .effects = &.{"Prints names only, never values."},
+        .examples = &.{ "ec secret list", "ec secret list --json" },
     },
     .{
-        .command = "cliproxy",
-        .action = "restart",
-        .usage = "ec cliproxy restart [options]",
-        .description = "Restart CLIProxyAPI on its host and wait until it answers.",
+        .command = "secret",
+        .action = "remove",
+        .usage = "ec secret remove NAME [options]",
+        .description = "Delete a secret saved on this machine.",
         .options = &common,
-        .effects = &.{ "On the host, restarts the io.cliproxyapi launch agent, loading it if needed. A restart clears the proxy's in-memory state, such as usage statistics and cooldowns.", "Elsewhere, runs ec cliproxy restart on the host over SSH in batch mode, then checks the proxy over Tailscale.", "Waits up to 30 seconds, or CLIPROXY_RESTART_TIMEOUT. No answer returns exit code 1." },
-        .examples = &.{ "ec cliproxy restart", "ec cliproxy restart --json" },
-    },
-    .{
-        .command = "cliproxy",
-        .action = "run",
-        .usage = "ec cliproxy run <command> [args...]",
-        .description = "Run a command with OPENAI_BASE_URL and OPENAI_API_KEY set.",
-        .options = &.{},
-        .effects = &.{ "Replaces ec with the command. Every argument after run, including --json and --help, goes to the command.", "The variables apply only to that process." },
-        .examples = &.{ "ec cliproxy run codex", "ec cliproxy run python3 script.py" },
+        .effects = &.{"Deletes ~/.config/ender-chest/secrets/NAME. Settings that use it are skipped on the next sync."},
+        .examples = &.{"ec secret remove executor"},
     },
     .{
         .command = "version",
@@ -190,25 +143,32 @@ fn optionRows(c: *core.Context, text: *std.ArrayList(u8), entries: []const Optio
     }
 }
 fn grouped(o: Options) bool {
-    return o.command == .desktop or o.command == .fleet or o.command == .cliproxy;
+    return o.command == .fleet or o.command == .plugin or o.command == .secret;
 }
-pub fn show(c: *core.Context, o: Options) !void {
+fn detail(c: *core.Context, text: *std.ArrayList(u8), entry: Definition) !void {
+    try append(c, text, "{s}\n\nUsage: {s}\n\nOptions:\n", .{ entry.description, entry.usage });
+    try optionRows(c, text, entry.options);
+    try append(c, text, "\nEffects:\n", .{});
+    for (entry.effects) |effect| try append(c, text, "  {s}\n", .{effect});
+    try append(c, text, "\nExamples:\n", .{});
+    for (entry.examples) |example| try append(c, text, "  {s}\n", .{example});
+}
+pub fn show(c: *core.Context, o: Options, plugins: []const plugin.Plugin) !void {
     var entries: std.ArrayList(Definition) = .empty;
     for (definitions) |entry| {
         if (o.command != .help and !core.eql(u8, entry.command, @tagName(o.command))) continue;
-        if (grouped(o) and o.action != .help and !core.eql(u8, entry.action, @tagName(o.action))) continue;
+        if (grouped(o) and o.action.len > 0 and !core.eql(u8, entry.action, o.action)) continue;
         try entries.append(c.a, entry);
+    }
+    // Explicit actions such as `ec fleet sync --help` narrow to one entry; the default action does not.
+    if (grouped(o) and entries.items.len == 1 and !explicit(o)) {
+        entries.clearRetainingCapacity();
+        for (definitions) |entry| if (core.eql(u8, entry.command, @tagName(o.command))) try entries.append(c.a, entry);
     }
     var text: std.ArrayList(u8) = .empty;
     try append(c, &text, "ec {s} - ender chest\n\n", .{@import("main.zig").version});
     if (entries.items.len == 1) {
-        const entry = entries.items[0];
-        try append(c, &text, "{s}\n\nUsage: {s}\n\nOptions:\n", .{ entry.description, entry.usage });
-        try optionRows(c, &text, entry.options);
-        try append(c, &text, "\nEffects:\n", .{});
-        for (entry.effects) |effect| try append(c, &text, "  {s}\n", .{effect});
-        try append(c, &text, "\nExamples:\n", .{});
-        for (entry.examples) |example| try append(c, &text, "  {s}\n", .{example});
+        try detail(c, &text, entries.items[0]);
     } else {
         const scope = if (grouped(o)) try c.fmt("ec {s}", .{@tagName(o.command)}) else "ec";
         try append(c, &text, "Usage: {s} <command> [options]\n\nCommands:\n", .{scope});
@@ -219,17 +179,57 @@ pub fn show(c: *core.Context, o: Options) !void {
                 if (entry.action.len > 0 or core.eql(u8, entry.command, "version")) continue;
                 try append(c, &text, "  {s:<12} {s}\n", .{ entry.command, entry.description });
             }
-            try append(c, &text, "  desktop      Wake or shut down the desktop, check reachability, or unlock its wallet.\n", .{});
             try append(c, &text, "  fleet        Show or update ec on every machine in the tailnet.\n", .{});
-            try append(c, &text, "  cliproxy     Configure or query CLIProxyAPI, restart it, or run a command through it.\n", .{});
+            try append(c, &text, "  plugin       List enabled plugins or update one from GitHub.\n", .{});
+            try append(c, &text, "  secret       Save, list, or remove secrets that plugin settings use.\n", .{});
+            if (plugins.len > 0) {
+                try append(c, &text, "\nPlugins:\n", .{});
+                for (plugins) |p| {
+                    try append(c, &text, "  {s:<12} {s}\n", .{ p.name, p.description });
+                    for (p.commands) |cmd| try entries.append(c.a, try definition(c, p, cmd));
+                }
+            }
         }
         try append(c, &text, "\nOptions:\n", .{});
         try optionRows(c, &text, &common);
         if (!grouped(o)) try append(c, &text, "  --version               Show the CLI version.\n", .{});
         try append(c, &text, "\nUse {s} <command> --help for options, effects, and examples.\nAdd --json for structured command definitions.\n", .{scope});
-        if (o.command == .desktop) try append(c, &text, "\nExamples:\n  ec desktop start\n  ec desktop stop\n  ec desktop status --json\n  ec desktop auth --setup\n", .{});
         if (o.command == .fleet) try append(c, &text, "\nExamples:\n  ec fleet\n  ec fleet sync\n", .{});
-        if (o.command == .cliproxy) try append(c, &text, "\nExamples:\n  ec cliproxy restart\n  ec cliproxy models\n  ec cliproxy run codex\n", .{});
+    }
+    try append(c, &text, "\nExit codes: 0 success, 1 operation failed or unreachable, 2 invalid arguments.\n", .{});
+    try c.resultData("help", true, text.items, .{ .command_definitions = entries.items });
+}
+// options.zig fills in a default action only after help returns, so a set action was typed.
+fn explicit(o: Options) bool {
+    return o.action.len > 0;
+}
+fn definition(c: *core.Context, p: plugin.Plugin, cmd: plugin.Command) !Definition {
+    var opts: std.ArrayList(Option) = .empty;
+    for (cmd.options) |o| try opts.append(c.a, .{ .name = o.name, .type = if (o.kind == .string) .string else .boolean, .description = o.description, .values = o.values, .default = o.default });
+    if (!cmd.passthrough) try opts.appendSlice(c.a, &common);
+    return .{ .command = p.name, .action = cmd.name, .plugin = p.source, .usage = if (cmd.usage.len > 0) cmd.usage else try c.fmt("ec {s} {s} [options]", .{ p.name, cmd.name }), .description = cmd.description, .options = opts.items, .effects = cmd.effects, .examples = cmd.examples };
+}
+// Help for one plugin, or for one of its commands. Reads only the manifest.
+pub fn showPlugin(c: *core.Context, p: plugin.Plugin, cmd: ?plugin.Command) !void {
+    var entries: std.ArrayList(Definition) = .empty;
+    var text: std.ArrayList(u8) = .empty;
+    try append(c, &text, "ec {s} - ender chest\n\n", .{@import("main.zig").version});
+    if (cmd) |one| {
+        const d = try definition(c, p, one);
+        try entries.append(c.a, d);
+        try detail(c, &text, d);
+    } else {
+        try append(c, &text, "{s}\n\nUsage: ec {s} <command> [options]\n\nCommands:\n", .{ p.description, p.name });
+        for (p.commands) |one| {
+            try append(c, &text, "  {s:<12} {s}{s}\n", .{ one.name, one.description, if (p.default != null and core.eql(u8, p.default.?, one.name)) " (default)" else "" });
+            try entries.append(c.a, try definition(c, p, one));
+        }
+        if (p.settings.len > 0) {
+            try append(c, &text, "\nSettings, under [plugins.{s}] in ender-chest.toml:\n", .{p.name});
+            for (p.settings) |s| try append(c, &text, "  {s:<23} {s}{s}{s}\n", .{ s.name, s.description, if (s.required) " Required." else "", if (s.kind == .secret) " Use { secret = \"NAME\" }." else "" });
+        }
+        try append(c, &text, "\nSource: {s}{s}\n", .{ p.source, if (p.commit) |cm| try c.fmt(" @ {s}", .{cm}) else "" });
+        try append(c, &text, "\nUse ec {s} <command> --help for options, effects, and examples.\n", .{p.name});
     }
     try append(c, &text, "\nExit codes: 0 success, 1 operation failed or unreachable, 2 invalid arguments.\n", .{});
     try c.resultData("help", true, text.items, .{ .command_definitions = entries.items });

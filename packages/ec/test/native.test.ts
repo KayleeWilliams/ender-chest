@@ -1,8 +1,5 @@
-import { execFile, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createSocket } from "node:dgram";
-import type { Socket } from "node:dgram";
-import { once } from "node:events";
 import {
   chmodSync,
   cpSync,
@@ -21,7 +18,6 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { parse as toml } from "smol-toml";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,33 +33,33 @@ import {
 
 const executable = path.join(cliRoot, "zig-out/bin/ec");
 const roots: string[] = [];
-const sockets: Socket[] = [];
-const exec = promisify(execFile);
 afterEach(() => {
-  for (const s of sockets.splice(0)) {
-    s.close();
-  }
   for (const root of roots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
   }
 });
+// The proxy provider and the Executor MCP server, so syncs exercise agent settings.
+const plugins = `
+[plugins.cliproxyapi]
+url = "http://proxy.example.test:8317"
+key = { secret = "cliproxyapi" }
+
+[plugins.executor]
+url = "https://mcp.example.test:4312"
+key = { secret = "executor" }
+`;
 const fixture = () => {
   const root = mkdtempSync(path.join(tmpdir(), "ec-test-"));
   roots.push(root);
   const repo = path.join(root, "repo");
   const home = path.join(root, "home");
-  writeSourceRepo(repo);
+  writeSourceRepo(repo, plugins);
   mkdirSync(home, { recursive: true });
-  write(
-    home,
-    ".config/ender-chest/secrets/cliproxyapi.json",
-    JSON.stringify({ apiKey: "test-client-key" })
-  );
+  write(home, ".config/ender-chest/secrets/cliproxyapi", "test-client-key\n");
+  write(home, ".config/ender-chest/secrets/executor", `${"k".repeat(32)}\n`);
   gitInit(repo);
   const env = {
     ...process.env,
-    DESKTOP_CONFIG: "",
-    DESKTOP_RELAY: undefined,
     EC_NO_UPDATE: "1",
     EC_REPO: repo,
     HOME: home,
@@ -86,25 +82,6 @@ const fixture = () => {
   };
   return { apply, env, fake, home, repo, root, run };
 };
-const desktop = () => {
-  const f = fixture();
-  const configFile = write(
-    f.home,
-    ".config/desktop/config.json",
-    JSON.stringify({
-      broadcast: "127.0.0.1",
-      host: "desktop.test",
-      mac: "02:00:00:00:00:01",
-      relay: "relay.test",
-      sshUser: "user",
-    })
-  );
-  return {
-    ...f,
-    config: JSON.parse(readFileSync(configFile, "utf-8")),
-    configFile,
-  };
-};
 const releaseAssetKey = (): string => {
   let arch: string = process.arch;
   if (process.arch === "arm64") {
@@ -116,9 +93,12 @@ const releaseAssetKey = (): string => {
 };
 const sourceHash = (repo: string): string => {
   const files = ["build.zig", "build.zig.zon", ".zig-version"];
-  for (const name of readdirSync(path.join(repo, "src"))) {
-    if (name.endsWith(".zig")) {
-      files.push(path.join("src", name));
+  for (const entry of readdirSync(path.join(repo, "src"), {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (entry.isFile() && !entry.name.startsWith(".")) {
+      files.push(path.relative(repo, path.join(entry.parentPath, entry.name)));
     }
   }
   files.sort();
@@ -131,27 +111,10 @@ const sourceHash = (repo: string): string => {
   }
   return hash.digest("hex");
 };
-const receiver = async () => {
-  const socket = createSocket("udp4");
-  sockets.push(socket);
-  socket.bind(0, "127.0.0.1");
-  await once(socket, "listening");
-  return { message: once(socket, "message"), port: socket.address().port };
-};
-
 const gitAt = (cwd: string, ...args: string[]) => {
   const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
   expect(r.status, r.stderr).toBe(0);
   return r;
-};
-
-// Fake ping answers from a script of exit codes, one per call, repeating the last.
-const pings = (f: ReturnType<typeof desktop>, codes: number[]) => {
-  const count = path.join(f.root, "pings");
-  return f.fake(
-    "ping",
-    `const fs=require('node:fs'),f=${JSON.stringify(count)},c=${JSON.stringify(codes)};const n=fs.existsSync(f)?+fs.readFileSync(f,'utf8'):0;fs.writeFileSync(f,String(n+1));process.exit(c[Math.min(n,c.length-1)]);`
-  );
 };
 
 describe("native ec", () => {
@@ -164,7 +127,7 @@ describe("native ec", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toContain("ec <command>");
     expect(r.stdout).toContain("--json");
-    expect(r.stdout).toContain("desktop");
+    expect(r.stdout).toContain("plugin");
   });
   it("prints structured help and version without configuration", () => {
     const { run } = fixture();
@@ -180,9 +143,6 @@ describe("native ec", () => {
       source_hash: sourceHash(cliRoot),
       version: "dev",
     });
-    expect(
-      run(["desktop", "auth", "--help"], { DESKTOP_CONFIG: "/missing" }).stdout
-    ).toContain("auth --setup");
   });
   it.each([
     {
@@ -198,18 +158,10 @@ describe("native ec", () => {
     },
     { args: ["push"], flags: ["repo", "profile", "dry-run", "json", "help"] },
     { args: ["verify"], flags: ["repo", "profile", "json", "help"] },
-    {
-      args: ["desktop", "start"],
-      flags: ["local", "via", "no-wait", "no-auth", "json", "help"],
-    },
-    { args: ["desktop", "stop"], flags: ["no-wait", "json", "help"] },
-    { args: ["desktop", "status"], flags: ["json", "help"] },
-    {
-      args: ["desktop", "auth"],
-      flags: ["setup", "forget", "local", "json", "help"],
-    },
     { args: ["fleet", "status"], flags: ["json", "help"] },
     { args: ["fleet", "sync"], flags: ["json", "help"] },
+    { args: ["plugin", "list"], flags: ["repo", "json", "help"] },
+    { args: ["secret", "set"], flags: ["json", "help"] },
   ])(
     "scopes offline help and machine discovery to $args",
     ({ args, flags }) => {
@@ -217,7 +169,7 @@ describe("native ec", () => {
         spawnSync(executable, extra, {
           cwd: tmpdir(),
           encoding: "utf-8",
-          env: { DESKTOP_CONFIG: "/missing", PATH: "/missing" },
+          env: { PATH: "/missing" },
         });
       const human = run([...args, "--help"]);
       expect(human.status, human.stderr).toBe(0);
@@ -252,34 +204,22 @@ describe("native ec", () => {
     expect(
       sync.options.find((o: { name: string }) => o.name === "profile")
     ).toMatchObject({
-      default: "detected",
+      default: "mac on macOS, cloud in CI, containers, and Linux",
       required: false,
       type: "string",
-      values: ["mac", "cloud"],
+      // Profiles are names that ender-chest.toml filters on, not a fixed list.
+      values: [],
     });
     const push = definitions.find(
       (d: { command: string }) => d.command === "push"
     );
     expect(push.effects.join(" ")).toContain("including with --dry-run");
-    const desktopHelp = JSON.parse(f.run(["help", "desktop", "--json"]).stdout)
-      .data.command_definitions;
-    expect(desktopHelp.map((d: { action: string }) => d.action)).toEqual([
-      "start",
-      "stop",
-      "status",
-      "auth",
-    ]);
     expect(existsSync(path.join(f.home, ".gitconfig"))).toBe(false);
   });
   it.each([
-    { args: ["sync", "--profile"], message: "--profile needs mac or cloud." },
+    { args: ["sync", "--profile"], message: "--profile needs a profile name" },
     { args: ["sync", "--repo", ""], message: "--repo needs a checkout path." },
-    { args: ["desktop", "halt"], message: "Use start, stop, status, or auth." },
     { args: ["fleet", "update"], message: "Use status or sync." },
-    {
-      args: ["desktop", "start", "--local", "--via", "relay"],
-      message: "either --local or --via",
-    },
   ])(
     "explains invalid arguments in human and JSON output: $args",
     ({ args, message }) => {
@@ -312,13 +252,7 @@ describe("native ec", () => {
   });
   it.each([
     ["sync", "--profile"],
-    ["sync", "--profile", "windows"],
     ["verify", "--dry-run"],
-    ["desktop", "start", "--local", "--via", "relay"],
-    ["desktop", "status", "--local"],
-    ["desktop", "status", "--repo", "/missing"],
-    ["desktop", "auth", "--setup", "--forget"],
-    ["desktop", "stop", "--local"],
     ["fleet", "--no-wait"],
     ["sync", "push"],
     ["--nope"],
@@ -334,16 +268,13 @@ describe("native ec", () => {
   });
   it("applies a clean machine, installs a native binary, and verifies without Node", () => {
     const f = fixture();
-    const r = f.run(["sync", "--skip-packages", "--json"], {
+    const r = f.run(["sync", "--skip-packages", "--profile", "mac", "--json"], {
       PATH: "/usr/bin:/bin",
     });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject({ command: "sync", ok: true });
     expect(filePermissions(path.join(f.home, ".ssh/config"))).toBe(0o600);
     expect(filePermissions(path.join(f.home, ".ssh"))).toBe(0o700);
-    expect(
-      filePermissions(path.join(f.home, ".config/cliproxyapi/client.json"))
-    ).toBe(0o600);
     expect(readFileSync(path.join(f.home, ".local/bin/ec"))).toEqual(
       readFileSync(executable)
     );
@@ -354,7 +285,7 @@ describe("native ec", () => {
     }
     const installed = spawnSync(
       path.join(f.home, ".local/bin/ec"),
-      ["verify", "--json"],
+      ["verify", "--profile", "mac", "--json"],
       {
         cwd: tmpdir(),
         encoding: "utf-8",
@@ -363,13 +294,6 @@ describe("native ec", () => {
     );
     expect(installed.status, installed.stderr).toBe(0);
     expect(JSON.parse(installed.stdout).ok).toBe(true);
-    const legacy = spawnSync(
-      path.join(f.home, ".local/bin/desktop"),
-      ["--help"],
-      { encoding: "utf-8", env: { HOME: f.home, PATH: "/usr/bin:/bin" } }
-    );
-    expect(legacy.status).toBe(0);
-    expect(legacy.stdout).toContain("ec desktop start");
   });
   it("syncs the primary checkout from a linked worktree without a failed pull", () => {
     const f = fixture();
@@ -465,7 +389,7 @@ describe("native ec", () => {
       JSON.parse(readFileSync(path.join(f.home, ".claude.json"), "utf-8"))
     ).toMatchObject({
       mcpServers: {
-        executor: { url: "https://example.test/mcp" },
+        executor: { url: "https://mcp.example.test:4312/mcp" },
         local: { command: "local" },
       },
       oauth: "keep",
@@ -540,12 +464,9 @@ describe("native ec", () => {
     for (const name of ["build.zig", "build.zig.zon", ".zig-version"]) {
       cpSync(path.join(cliRoot, name), path.join(f.repo, name));
     }
-    mkdirSync(path.join(f.repo, "src"));
-    for (const name of readdirSync(path.join(cliRoot, "src"))) {
-      if (name.endsWith(".zig")) {
-        cpSync(path.join(cliRoot, "src", name), path.join(f.repo, "src", name));
-      }
-    }
+    cpSync(path.join(cliRoot, "src"), path.join(f.repo, "src"), {
+      recursive: true,
+    });
     cpSync(path.join(cliRoot, "zig-pkg"), path.join(f.repo, "zig-pkg"), {
       recursive: true,
     });
@@ -569,8 +490,6 @@ describe("native ec", () => {
     if (!compiler) {
       throw new Error("Zig did not report its executable path");
     }
-    write(f.home, ".local/lib/desktop/cli.mjs", "obsolete");
-    write(f.home, ".local/lib/desktop/auth.mjs", "obsolete");
     const r = spawnSync(executable, ["sync", "--skip-packages", "--json"], {
       encoding: "utf-8",
       env: {
@@ -589,9 +508,6 @@ describe("native ec", () => {
     expect(readFileSync(installed)).not.toEqual(readFileSync(executable));
     expect(readFileSync(installed)).toEqual(
       readFileSync(path.join(f.repo, "zig-out/bin/ec"))
-    );
-    expect(existsSync(path.join(f.home, ".local/lib/desktop/cli.mjs"))).toBe(
-      false
     );
     const second = spawnSync(installed, ["sync", "--skip-packages", "--json"], {
       encoding: "utf-8",
@@ -612,12 +528,9 @@ describe("native ec", () => {
     for (const name of ["build.zig", "build.zig.zon", ".zig-version"]) {
       cpSync(path.join(cliRoot, name), path.join(f.repo, name));
     }
-    mkdirSync(path.join(f.repo, "src"));
-    for (const name of readdirSync(path.join(cliRoot, "src"))) {
-      if (name.endsWith(".zig")) {
-        cpSync(path.join(cliRoot, "src", name), path.join(f.repo, "src", name));
-      }
-    }
+    cpSync(path.join(cliRoot, "src"), path.join(f.repo, "src"), {
+      recursive: true,
+    });
     writeFileSync(
       path.join(f.repo, "src/main.zig"),
       `${readFileSync(path.join(f.repo, "src/main.zig"), "utf-8")}\n// Release fixture.\n`
@@ -695,12 +608,9 @@ describe("native ec", () => {
     for (const name of ["build.zig", "build.zig.zon", ".zig-version"]) {
       cpSync(path.join(cliRoot, name), path.join(f.repo, name));
     }
-    mkdirSync(path.join(f.repo, "src"));
-    for (const name of readdirSync(path.join(cliRoot, "src"))) {
-      if (name.endsWith(".zig")) {
-        cpSync(path.join(cliRoot, "src", name), path.join(f.repo, "src", name));
-      }
-    }
+    cpSync(path.join(cliRoot, "src"), path.join(f.repo, "src"), {
+      recursive: true,
+    });
     writeFileSync(
       path.join(f.repo, "src/main.zig"),
       `${readFileSync(path.join(f.repo, "src/main.zig"), "utf-8")}\n// Bad checksum fixture.\n`
@@ -1003,230 +913,6 @@ fs.copyFileSync(process.env.TEST_RELEASE_DIR + "/" + file, args[args.indexOf("-o
     const r = f.run(["sync", "--skip-packages", "--json"]);
     expect(r.status).toBe(1);
     expect(readFileSync(keep, "utf-8")).toBe("safe");
-  });
-});
-
-describe("native desktop", () => {
-  it("sends a real 102-byte UDP magic packet with no runtime on PATH", async () => {
-    const f = desktop();
-    const { port, message } = await receiver();
-    writeFileSync(f.configFile, JSON.stringify({ ...f.config, port }));
-    const r = await exec(
-      executable,
-      ["desktop", "start", "--local", "--no-wait", "--json"],
-      { env: { ...f.env, PATH: "/nonexistent" } }
-    );
-    const [packet] = await message;
-    expect(packet).toEqual(
-      Buffer.from("ff".repeat(6) + "020000000001".repeat(16), "hex")
-    );
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      command: "desktop start",
-      ok: true,
-    });
-    expect(r.stdout).not.toContain("is reachable");
-  });
-  it("relays through the installed native command with a minimal SSH PATH", async () => {
-    const client = desktop();
-    const relay = desktop();
-    relay.apply();
-    const { port, message } = await receiver();
-    writeFileSync(relay.configFile, JSON.stringify({ ...relay.config, port }));
-    const log = path.join(client.root, "ssh.json");
-    const env = client.fake(
-      "ssh",
-      `const fs=require('node:fs'),cp=require('node:child_process'),a=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(log)},JSON.stringify(a));const r=cp.spawnSync('/bin/sh',['-c',a.at(-1)],{env:{HOME:${JSON.stringify(relay.home)},PATH:'/usr/bin:/bin'},stdio:'inherit'});process.exit(r.status??1);`
-    );
-    const result = await exec(
-      executable,
-      ["desktop", "start", "--no-wait", "--json"],
-      { env: { ...client.env, ...env } }
-    );
-    const [packet] = await message;
-    expect(packet.length).toBe(102);
-    expect(JSON.parse(readFileSync(log, "utf-8"))).toEqual([
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=8",
-      "-o",
-      "ConnectionAttempts=1",
-      "relay.test",
-      '"$HOME/.local/bin/ec" desktop start --local --no-wait',
-    ]);
-    expect(JSON.parse(result.stdout).ok).toBe(true);
-  });
-  it("prioritizes --via over the environment and reports relay failures as JSON", () => {
-    const f = desktop();
-    const env = f.fake(
-      "ssh",
-      "console.error(process.argv.slice(2).join(' '));process.exit(255)"
-    );
-    const r = f.run(
-      ["desktop", "start", "--via", "other@relay.test", "--no-wait", "--json"],
-      { ...env, DESKTOP_RELAY: "env.test" }
-    );
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout).ok).toBe(false);
-    expect(r.stderr).toContain("other@relay.test");
-    expect(r.stderr).not.toContain("env.test");
-  });
-  it.each(["-oProxyCommand=bad", "host;echo bad", "$(echo bad)"])(
-    "rejects unsafe relay %s",
-    (relay) => {
-      const f = desktop();
-      const r = f.run(["desktop", "start", "--no-wait", "--json"], {
-        DESKTOP_RELAY: relay,
-      });
-      expect(r.status).toBe(1);
-      expect(JSON.parse(r.stdout).message).toContain("Invalid wake relay");
-    }
-  );
-  it.each([
-    { mac: "02:00:00:00:00" },
-    { broadcast: "host.test" },
-    { port: 0 },
-    { port: 65_536 },
-    { port: 1.5 },
-  ])("rejects bad wake settings %j", (change) => {
-    const f = desktop();
-    writeFileSync(f.configFile, JSON.stringify({ ...f.config, ...change }));
-    const r = f.run(["desktop", "start", "--local", "--no-wait", "--json"]);
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout).message).toContain("Invalid");
-  });
-  it.each([0, 1])(
-    "reports reachability without asserting power state: %d",
-    (code) => {
-      const f = desktop();
-      const r = f.run(
-        ["desktop", "status", "--json"],
-        f.fake("ping", `process.exit(${code})`)
-      );
-      expect(r.status).toBe(code);
-      expect(JSON.parse(r.stdout).ok).toBe(code === 0);
-      if (code) {
-        expect(r.stdout).toContain("disconnected from Tailscale");
-        expect(JSON.parse(r.stdout).error.code).toBe("unreachable");
-      } else {
-        expect(JSON.parse(r.stdout).error).toBeNull();
-      }
-    }
-  );
-  it("times out even if ping closes both output streams before hanging", () => {
-    const f = desktop();
-    const env = f.fake(
-      "ping",
-      "const fs=require('node:fs');fs.closeSync(1);fs.closeSync(2);setTimeout(()=>{},20000)"
-    );
-    const start = Date.now();
-    const r = f.run(["desktop", "status", "--json"], env);
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout).message).toContain("not reachable");
-    expect(Date.now() - start).toBeLessThan(10_000);
-  }, 12_000);
-  it("fails explicitly for missing config and refuses interactive auth in JSON mode", () => {
-    const f = desktop();
-    const missing = JSON.parse(
-      f.run(["desktop", "status", "--json"], { DESKTOP_CONFIG: "/missing" })
-        .stdout
-    );
-    expect(missing.message).toContain("Cannot read");
-    expect(missing.error.code).toBe("operation_failed");
-    const r = f.run(["desktop", "auth", "--setup", "--json"]);
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout).message).toContain("cannot use --json");
-    expect(JSON.parse(r.stdout).error.code).toBe("interaction_required");
-  });
-
-  it("wakes, waits until the desktop answers, and reports it awake", async () => {
-    const f = desktop();
-    const { port, message } = await receiver();
-    writeFileSync(f.configFile, JSON.stringify({ ...f.config, port }));
-    const r = await exec(
-      executable,
-      ["desktop", "start", "--local", "--no-auth", "--json"],
-      { env: { ...f.env, ...pings(f, [1, 1, 0]) } }
-    );
-    const [packet] = await message;
-    expect(packet.length).toBe(102);
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      command: "desktop start",
-      message: "Desktop is awake.",
-      ok: true,
-    });
-    expect(r.stderr).toContain("Waiting up to 180s");
-  }, 15_000);
-  it("skips the wake packet and unlocks when the desktop is already awake", () => {
-    const f = desktop();
-    const log = path.join(f.root, "ssh.json");
-    const env = {
-      ...pings(f, [0]),
-      ...f.fake(
-        "ssh",
-        `require('node:fs').appendFileSync(${JSON.stringify(log)},JSON.stringify(process.argv.slice(2))+"\\n");console.log('unlocked')`
-      ),
-    };
-    const r = f.run(["desktop", "start", "--json"], env);
-    expect(r.status, r.stderr).toBe(0);
-    const result = JSON.parse(r.stdout);
-    expect(result.message).toContain("Desktop is already awake.");
-    if (process.platform === "darwin") {
-      expect(result.message).toContain("already unlocked");
-      expect(readFileSync(log, "utf-8")).toContain("user@desktop.test");
-      expect(readFileSync(log, "utf-8")).not.toContain("relay.test");
-    }
-  });
-  it("reports unreachable when the desktop never answers", () => {
-    const f = desktop();
-    writeFileSync(
-      f.configFile,
-      JSON.stringify({ ...f.config, port: 9, waitSeconds: 1 })
-    );
-    const r = f.run(["desktop", "start", "--local", "--json"], pings(f, [1]));
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      error: { code: "unreachable" },
-      ok: false,
-    });
-    expect(JSON.parse(r.stdout).message).toContain("did not respond within 1s");
-  });
-  it("shuts down through KDE and waits until the desktop is offline", () => {
-    const f = desktop();
-    const log = path.join(f.root, "ssh.json");
-    const env = {
-      ...pings(f, [0, 0, 1]),
-      ...f.fake(
-        "ssh",
-        `require('node:fs').writeFileSync(${JSON.stringify(log)},JSON.stringify(process.argv.slice(2)));console.log('ready')`
-      ),
-    };
-    const r = f.run(["desktop", "stop", "--json"], env);
-    expect(r.status, r.stderr).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      command: "desktop stop",
-      message: "Desktop is off.",
-      ok: true,
-    });
-    const args = JSON.parse(readFileSync(log, "utf-8"));
-    expect(args).toContain("user@desktop.test");
-    expect(args).toContain("BatchMode=yes");
-    expect(args.at(-1)).toContain("org.kde.Shutdown logoutAndShutdown");
-  }, 15_000);
-  it("does not wait for shutdown when SSH never connects, and treats an offline desktop as stopped", () => {
-    const f = desktop();
-    const failed = f.run(["desktop", "stop", "--json"], {
-      ...pings(f, [0]),
-      ...f.fake("ssh", "console.error('Permission denied');process.exit(255)"),
-    });
-    expect(failed.status).toBe(1);
-    expect(JSON.parse(failed.stdout).message).toContain(
-      "Cannot SSH to user@desktop.test"
-    );
-    const off = desktop();
-    const r = off.run(["desktop", "stop", "--json"], pings(off, [1]));
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).message).toContain("already off");
   });
 });
 

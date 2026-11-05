@@ -1,0 +1,56 @@
+name = "cliproxyapi"
+description = "Point Claude Code, Codex, and Grok at a CLIProxyAPI server."
+run = "ec:cliproxyapi"
+
+[settings.url]
+required = true
+description = "Proxy origin without /v1, such as https://proxy.example.test:8317."
+
+[settings.key]
+type = "secret"
+description = "Client API key the proxy accepts."
+
+[settings.host]
+description = "SSH host that runs the proxy, for restart. Defaults to the url's hostname."
+
+[provider]
+name = "CLIProxyAPI"
+base_url = "{url}"
+api_key = "{key}"
+models = ["grok-4.7", "grok-4.6", "grok-4.5"]
+
+[[commands]]
+name = "url"
+description = "Print the OpenAI-compatible base URL."
+usage = "ec cliproxyapi url"
+effects = ["Makes no network requests."]
+examples = ["ec cliproxyapi url", "ec cliproxyapi url --json"]
+
+[[commands]]
+name = "models"
+description = "List the models the proxy serves."
+usage = "ec cliproxyapi models"
+effects = [
+  "Requests /v1/models with the key, sent to curl on stdin. An unreachable host, a rejected key, or another HTTP error returns exit code 1.",
+]
+examples = ["ec cliproxyapi models", "ec cliproxyapi models --json"]
+
+[[commands]]
+name = "restart"
+description = "Restart the proxy on its host and wait until it answers."
+usage = "ec cliproxyapi restart"
+effects = [
+  "On a macOS host, restarts the io.cliproxyapi launch agent, loading it if needed. Restarting clears the proxy's in-memory state.",
+  "Elsewhere, runs ec cliproxyapi restart on the host over SSH in batch mode. Waits up to 30 seconds, or CLIPROXY_RESTART_TIMEOUT.",
+]
+examples = ["ec cliproxyapi restart"]
+
+[[commands]]
+name = "run"
+description = "Run a command with OPENAI_BASE_URL and OPENAI_API_KEY set."
+usage = "ec cliproxyapi run <command> [args...]"
+passthrough = true
+effects = [
+  "Replaces ec with the command. Every argument after run, including --json and --help, goes to the command.",
+]
+examples = ["ec cliproxyapi run codex", "ec cliproxyapi run python3 script.py"]
