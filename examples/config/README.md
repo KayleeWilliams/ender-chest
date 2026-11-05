@@ -4,13 +4,14 @@ This is a complete config checkout for Ender Chest. It installs shared agent ins
 
 ## Start here
 
-From the Ender Chest source checkout, copy this directory into a new location:
+On GitHub, choose **Use this template** on [ender-chest-template](https://github.com/KayleeWilliams/ender-chest-template), create a private repository, and clone it:
 
 ```sh
-cp -R examples/config ~/my-machine-config
-git -C ~/my-machine-config init
+git clone https://github.com/YOUR-NAME/my-machine-config.git ~/my-machine-config
 cd ~/my-machine-config
 ```
+
+Or copy `examples/config` out of the Ender Chest source checkout and run `git init` in the copy.
 
 Edit [agents/shared/AGENTS.md](agents/shared/AGENTS.md) to describe how you want agents to work across your projects. Review the agent preferences below, then apply the config:
 
