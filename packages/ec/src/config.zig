@@ -3,6 +3,28 @@ const toml = @import("toml");
 const core = @import("core.zig");
 const C = core.Context;
 
+// zig-toml builds each table with an allocator that points at an arena in parseString's stack
+// frame, then returns a copy of that arena. Adding a key to such a table can allocate through the
+// dead pointer and crash, so parse points every table at a, which must be an arena.
+fn parse(a: std.mem.Allocator, text: []const u8) !*toml.Table {
+    var parser = toml.Parser(toml.Table).init(a);
+    defer parser.deinit();
+    const root = try a.create(toml.Table);
+    root.* = (try parser.parseString(text)).value;
+    rebind(.{ .table = root }, a);
+    return root;
+}
+fn rebind(v: toml.Value, a: std.mem.Allocator) void {
+    switch (v) {
+        .table => |t| {
+            t.allocator = a;
+            var it = t.valueIterator();
+            while (it.next()) |child| rebind(child.*, a);
+        },
+        .array => |list| for (list.items) |item| rebind(item, a),
+        else => {},
+    }
+}
 fn table(a: std.mem.Allocator, parent: *toml.Table, key: []const u8) !*toml.Table {
     if (parent.get(key)) |v| {
         if (v != .table) return error.ExpectedTable;
@@ -131,12 +153,8 @@ pub const Managed = struct { mcp_servers: []const []const u8 = &.{}, provider: ?
 const header_keys = [_][]const u8{ "bearer_token_env_var", "bearer_token_file", "env_http_headers", "http_headers", "headers" };
 const model_auth_keys = [_][]const u8{ "api_base_url", "env_key", "auth_provider", "model_provider", "extra_headers", "env_http_headers", "query_params", "mtls_cert_dir", "base_url", "api_key", "api_backend" };
 pub fn configure(a: std.mem.Allocator, current: []const u8, agent: enum { codex, grok }, contrib: plugin.Contributions, previous: Managed) ![]const u8 {
-    var parser = toml.Parser(toml.Table).init(a);
-    defer parser.deinit();
-    var parsed = try parser.parseString(current);
-    defer parsed.deinit();
-    const alloc = parsed.arena.allocator();
-    const root = &parsed.value;
+    const alloc = a;
+    const root = try parse(a, current);
     if (root.get("mcp_servers")) |v| if (v == .table) {
         for (previous.mcp_servers) |name| if (!contributes(contrib, name)) {
             _ = v.table.remove(name);
@@ -308,6 +326,25 @@ pub fn apply(c: *C, contrib: plugin.Contributions) !void {
         try c.write(file, next, 0o600);
     }
     try saveManaged(c, contrib);
+}
+fn clobberStack() void {
+    var junk: [64 * 1024]u8 = undefined;
+    @memset(&junk, 0xaa);
+    std.mem.doNotOptimizeAway(&junk);
+}
+test "parsed tables can grow after the parser's stack frame is reused" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const root = try parse(arena.allocator(), "[mcp_servers.local]\nurl = 'https://example.test'\n[[list]]\nname = 'x'\n");
+    clobberStack();
+    const nested = root.get("list").?.array.items[0].table;
+    for (0..64) |i| {
+        const key = try std.fmt.allocPrint(arena.allocator(), "k{d}", .{i});
+        try root.put(key, .{ .integer = @intCast(i) });
+        try root.get("mcp_servers").?.table.put(key, .{ .integer = 1 });
+        try nested.put(key, .{ .integer = 1 });
+    }
+    try std.testing.expectEqual(@as(u32, 66), root.count());
 }
 test "TOML merge preserves quoted local keys and replaces stale provider auth" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
