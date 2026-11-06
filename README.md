@@ -1,3 +1,5 @@
+![Ender Chest inventory holding the logos of Codex, Claude, Meta Muse, Grok, Gemini, Cursor, OpenCode, Amp, Tembo, T3 Code, Orca, skills.sh, MCP, Executor, CLIProxyAPI, Tailscale, GitHub, Git, Homebrew, Zed, macOS, and Linux](docs/assets/ender-chest.png)
+
 # Ender Chest
 
 `ec` keeps development machines in sync. It applies a Git-backed config checkout, installs shared agent skills, and checks or updates machines over Tailscale and SSH.

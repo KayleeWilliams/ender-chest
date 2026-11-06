@@ -1,3 +1,5 @@
+![Ender Chest inventory holding the logos of Codex, Claude, Meta Muse, Grok, Gemini, Cursor, OpenCode, Amp, Tembo, T3 Code, Orca, skills.sh, MCP, Executor, CLIProxyAPI, Tailscale, GitHub, Git, Homebrew, Zed, macOS, and Linux](https://raw.githubusercontent.com/KayleeWilliams/ender-chest/main/docs/assets/ender-chest.png)
+
 # Machine config starter
 
 This is a complete config checkout for Ender Chest. It installs shared agent instructions, a review skill, shell and Git defaults, and starter preferences for Claude Code, Codex, and Grok.
