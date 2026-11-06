@@ -4,4 +4,4 @@
 
 No install scripts, compiler, or additional binary downloads are required. Install a release tarball with `npm install --global ./ender-chest-VERSION.tgz`, then run `ec --help`. Installing the CLI does not apply any machine config.
 
-For the curl installer, example config, and command reference, see the [repository](https://github.com/KayleeWilliams/ender-chest-cli). The curl installation runs directly without Node.
+For the curl installer, example config, and command reference, see the [repository](https://github.com/KayleeWilliams/ender-chest). The curl installation runs directly without Node.
