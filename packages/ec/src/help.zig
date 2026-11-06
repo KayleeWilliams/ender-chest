@@ -39,7 +39,7 @@ const definitions = [_]Definition{
             .{ .name = "skip-packages", .description = "Skip package installs and shell setup." },
             .{ .name = "update-skills", .description = "Refresh third-party skills from their Git repositories." },
         } ++ common),
-        .effects = &.{ "Applies the files, packages, setup steps, and plugins listed in ender-chest.toml, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "When Zig sources change, installs the matching GitHub release, or rebuilds with Zig if that download fails. EC_NO_UPDATE=1 skips the release check. Plugin commands do not check.", "Installs packages unless --skip-packages is set." },
+        .effects = &.{ "Applies the files, packages, setup steps, and plugins listed in ender-chest.toml, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "Installs a newer ec release first, then resumes with it. In a checkout with ec's sources, installs the release built from those sources or rebuilds with Zig. Development builds are never replaced by a release. EC_NO_UPDATE=1 skips the release check.", "Installs packages unless --skip-packages is set." },
         .examples = &.{ "ec sync", "ec sync --skip-packages", "ec sync --repo ~/dev/ender-chest --profile cloud --json" },
     },
     .{
@@ -120,6 +120,14 @@ const definitions = [_]Definition{
         .options = &common,
         .effects = &.{"Deletes ~/.config/ender-chest/secrets/NAME. Settings that use it are skipped on the next sync."},
         .examples = &.{"ec secret remove executor"},
+    },
+    .{
+        .command = "update",
+        .usage = "ec update [options]",
+        .description = "Install the latest ec release.",
+        .options = &([_]Option{.{ .name = "check", .description = "Report the latest release without installing it." }} ++ common),
+        .effects = &.{ "Replaces the ec you ran after checking the download's sha256 and running it once. A failed step leaves the old binary in place.", "For an npm tarball installation or a project dependency, prints the command to run instead. A development build prints the installer command.", "Interactive commands also say once a day when a newer release exists. EC_NO_UPDATE=1 or NO_UPDATE_NOTIFIER=1 turns that off, as do CI, --json, and output that is not a terminal." },
+        .examples = &.{ "ec update", "ec update --check", "ec update --check --json" },
     },
     .{
         .command = "version",

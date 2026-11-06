@@ -146,9 +146,19 @@ Secrets stay on the machine. Sync writes the ones that plugins contribute into a
 
 CLI releases come from `KayleeWilliams/ender-chest`, independently of your config remote. `EC_RELEASE_REPO=owner/repo` selects a fork's releases. While releases are private, downloads need `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login` on each device. These credentials stay local.
 
-Sync checks for the latest CLI release, verifies its checksum, installs it in `~/.local/bin/ec`, and resumes. `EC_NO_UPDATE=1` disables release checks. Public release checks need no GitHub credentials.
+Run `ec update` to install the latest release. It downloads the binary for your machine, checks its sha256 against the release manifest, runs it once, and then replaces the `ec` you ran. A failed step leaves the old binary in place. `ec update --check` reports the latest release without installing it, and `--json` returns the versions and release notes link.
 
-If you installed through npm or chose a custom directory, rerun that installation method to replace its copy. For npm, download and install the tarball from the newer release.
+`ec sync` installs a newer release before it applies your config, then resumes with the new binary. It never installs an older release, and it leaves development builds alone. In a checkout that contains ec's own sources, sync installs the release built from those sources, or rebuilds with Zig.
+
+After an interactive command such as `ec verify`, ec says when a newer release exists:
+
+```text
+Update available 0.0.5 → 0.0.6 · Run ec update
+```
+
+The notice appears at most once a day. The check sends one request to the GitHub releases API at most once a day, with no account or command details, and gives up after about three seconds. `ec sync`, `ec update`, plugin commands, `--json`, CI, and output that is not a terminal skip it. Set `EC_NO_UPDATE=1` or `NO_UPDATE_NOTIFIER=1` to turn off the notice; `EC_NO_UPDATE=1` also stops sync from installing releases.
+
+If you installed the npm tarball, `ec update` prints the commands that install the newer tarball. For a project dependency, update `ender-chest` in that project.
 
 The manual release workflow builds ARM64 and x86-64 binaries for macOS 13+ and Linux musl.
 

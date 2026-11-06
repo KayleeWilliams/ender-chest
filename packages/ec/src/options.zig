@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core.zig");
 const eq = core.eql;
 
-pub const Command = enum { help, version, sync, push, verify, fleet, plugin, secret, builtin, call };
+pub const Command = enum { help, version, sync, push, verify, fleet, plugin, secret, update, builtin, call };
 pub const Options = struct {
     command: Command = .help,
     // Subcommand of fleet, plugin, or secret.
@@ -16,6 +16,8 @@ pub const Options = struct {
     skip_packages: bool = false,
     update_skills: bool = false,
     dry_run: bool = false,
+    // ec update --check reports without installing.
+    check: bool = false,
     // For .call, the plugin name; its arguments follow in rest, unparsed. For .builtin, rest
     // holds everything after __plugin.
     name: []const u8 = "",
@@ -90,13 +92,17 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
             o.dry_run = true;
             continue;
         }
+        if (eq(u8, arg, "--check")) {
+            o.check = true;
+            continue;
+        }
         if (!command) {
             if (std.mem.startsWith(u8, arg, "-")) {
                 diagnostic.* = "Unknown option. Run ec --help for available options.";
                 return error.UnknownArgument;
             }
             command = true;
-            o.command = if (eq(u8, arg, "sync")) .sync else if (eq(u8, arg, "push") or eq(u8, arg, "--push")) .push else if (eq(u8, arg, "verify")) .verify else if (eq(u8, arg, "fleet")) .fleet else if (eq(u8, arg, "plugin")) .plugin else if (eq(u8, arg, "secret")) .secret else if (@import("manifest.zig").pluginName(arg)) .call else {
+            o.command = if (eq(u8, arg, "sync")) .sync else if (eq(u8, arg, "push") or eq(u8, arg, "--push")) .push else if (eq(u8, arg, "verify")) .verify else if (eq(u8, arg, "fleet")) .fleet else if (eq(u8, arg, "plugin")) .plugin else if (eq(u8, arg, "secret")) .secret else if (eq(u8, arg, "update")) .update else if (@import("manifest.zig").pluginName(arg)) .call else {
                 diagnostic.* = "Unknown command. Run ec --help for available commands.";
                 return error.UnknownArgument;
             };
@@ -137,12 +143,20 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
         diagnostic.* = "--dry-run is only available with ec push. It still captures files into the checkout.";
         return error.InvalidArguments;
     }
+    if (o.check and o.command != .update) {
+        diagnostic.* = "--check is only available with ec update.";
+        return error.InvalidArguments;
+    }
     if ((o.skip_packages or o.update_skills) and o.command != .sync) {
         diagnostic.* = "--skip-packages and --update-skills are only available with ec sync.";
         return error.InvalidArguments;
     }
     if (o.profile.len > 0 and o.command != .sync and o.command != .push and o.command != .verify) {
         diagnostic.* = "--profile applies to sync, push, and verify.";
+        return error.InvalidArguments;
+    }
+    if (o.command == .update and o.repo != null) {
+        diagnostic.* = "--repo does not apply to ec update. It updates the ec binary you ran.";
         return error.InvalidArguments;
     }
     if (o.command == .fleet and o.repo != null) {
@@ -176,6 +190,8 @@ test "core commands, plugin calls, and bad arguments" {
     try std.testing.expect(call.command == .call and call.json and !call.show_help and eq(u8, call.name, "wol") and call.rest.len == 4);
     const passed = try parse(&.{ "cliproxyapi", "run", "tool", "--json", "-x" });
     try std.testing.expect(!passed.json and passed.rest.len == 4);
+    try std.testing.expect((try parse(&.{ "update", "--check" })).command == .update);
+    try std.testing.expectError(error.InvalidArguments, parse(&.{ "verify", "--check" }));
     const builtin = try parse(&.{ "__plugin", "wol", "status" });
     try std.testing.expect(builtin.command == .builtin and builtin.rest.len == 2);
 }

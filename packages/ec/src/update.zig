@@ -65,27 +65,219 @@ pub fn tryRelease(c: *C, o: O, checkout_hash: []const u8) !void {
     if (attempted) |previous| if (eq(u8, previous, checkout_hash)) return;
     const release = loadRelease(c, checkout_hash) orelse return;
     if (plan(binary_hash, checkout_hash, release.hash, attempted) != .download) return;
-    const key = assetKey() orelse {
-        try c.log("No published ec binary for this target.", .{});
-        return;
-    };
-    const asset = release.asset(key) orelse {
-        try c.log("Release {s} has no {s} binary.", .{ release.version, key });
-        return;
-    };
-    const bytes = readAsset(c, release, asset) orelse {
-        try c.log("Could not download ec {s}. Rebuilding from the checkout if needed.", .{release.version});
-        return;
-    };
-    const sum = sha256Hex(bytes);
-    if (!eq(u8, &sum, asset.sha256)) {
-        try c.log("Refusing ec {s}: checksum did not match.", .{release.version});
-        return;
-    }
+    const bytes = try download(c, release) orelse return;
     const dest = try c.path(&.{ c.home, ".local/bin/ec" });
     try c.write(dest, bytes, 0o755);
     try c.log("Updating ec to {s}.", .{release.version});
     try reexec(c, o, dest, checkout_hash);
+}
+
+// The binary for this machine from a release, or null after logging why not.
+fn download(c: *C, release: Release) !?[]const u8 {
+    const key = assetKey() orelse {
+        try c.log("No published ec binary for this target.", .{});
+        return null;
+    };
+    const asset = release.asset(key) orelse {
+        try c.log("Release {s} has no {s} binary.", .{ release.version, key });
+        return null;
+    };
+    const bytes = readAsset(c, release, asset) orelse {
+        try c.log("Could not download ec {s}.", .{release.version});
+        return null;
+    };
+    const sum = sha256Hex(bytes);
+    if (!eq(u8, &sum, asset.sha256)) {
+        try c.log("Refusing ec {s}: checksum did not match.", .{release.version});
+        return null;
+    }
+    return bytes;
+}
+
+// For a config checkout without ec's sources: install the latest release when it is newer than
+// this binary. Development builds keep themselves, so sync never replaces one with an older release.
+pub fn syncLatest(c: *C, o: O) !void {
+    if (updatesDisabled(c) or !validVersion(version)) return;
+    const release = freshRelease(c) orelse return;
+    if (c.env.get("EC_RELEASE_ATTEMPTED")) |previous| if (eq(u8, previous, release.hash)) return;
+    if (!newer(release.version, version)) return;
+    const bytes = try download(c, release) orelse return;
+    const dest = try c.path(&.{ c.home, ".local/bin/ec" });
+    try c.write(dest, bytes, 0o755);
+    try c.log("Updating ec {s} to {s}.", .{ version, release.version });
+    try reexec(c, o, dest, release.hash);
+}
+
+pub const version = @import("build_options").version;
+
+// Releases are X.Y.Z without leading zeros. Local builds report "dev".
+pub fn validVersion(v: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, v, '.');
+    var count: usize = 0;
+    while (parts.next()) |part| : (count += 1) {
+        if (part.len == 0 or part.len > 9 or (part.len > 1 and part[0] == '0')) return false;
+        for (part) |ch| if (!std.ascii.isDigit(ch)) return false;
+    }
+    return count == 3;
+}
+pub fn newer(candidate: []const u8, current: []const u8) bool {
+    if (!validVersion(candidate) or !validVersion(current)) return false;
+    var a = std.mem.splitScalar(u8, candidate, '.');
+    var b = std.mem.splitScalar(u8, current, '.');
+    for (0..3) |_| {
+        const x = std.fmt.parseInt(u32, a.next().?, 10) catch return false;
+        const y = std.fmt.parseInt(u32, b.next().?, 10) catch return false;
+        if (x != y) return x > y;
+    }
+    return false;
+}
+
+// How this copy of ec was installed, which decides how ec update replaces it.
+pub const Method = enum { development, standalone, package, project };
+pub fn method(v: []const u8, exe: []const u8, project_manifest: bool) Method {
+    if (!validVersion(v)) return .development;
+    if (std.mem.indexOf(u8, exe, "/node_modules/") == null) return .standalone;
+    for ([_][]const u8{ "/install/global/node_modules/", "/yarn/global/node_modules/", "/yarn/data/global/node_modules/" }) |global| {
+        if (std.mem.indexOf(u8, exe, global) != null) return .package;
+    }
+    // pnpm keeps global packages under global/<n>/ or global/v<n>/<id>/, with their own package.json.
+    if (std.mem.indexOf(u8, exe, "/global/") != null and std.mem.indexOf(u8, exe, "/.pnpm/") != null) return .package;
+    // npm installs global packages under <prefix>/lib/node_modules, beside no package.json.
+    return if (project_manifest) .project else .package;
+}
+fn projectDir(exe: []const u8) []const u8 {
+    const pos = std.mem.indexOf(u8, exe, "/node_modules/") orelse return exe;
+    return exe[0..pos];
+}
+fn currentMethod(c: *C) !struct { method: Method, exe: []const u8 } {
+    const exe = try std.process.executablePathAlloc(c.io, c.a);
+    const manifest = c.exists(try c.path(&.{ projectDir(exe), "package.json" }));
+    return .{ .method = method(version, exe, manifest), .exe = exe };
+}
+fn notesUrl(c: *C, v: []const u8) ![]const u8 {
+    return c.fmt("https://github.com/{s}/releases/tag/v{s}", .{ repoSlug(c), v });
+}
+
+// ec update and ec update --check.
+pub fn run(c: *C, check: bool) !void {
+    const how = try currentMethod(c);
+    const release = freshRelease(c) orelse return c.fail("Could not read the latest ec release. Check your network, or run gh auth login while releases are private.", .{});
+    const available = newer(release.version, version);
+    const notes = try notesUrl(c, release.version);
+    const Data = struct { current: []const u8, latest: []const u8, update_available: bool, updated: bool, method: Method, release_notes: []const u8 };
+    var data: Data = .{ .current = version, .latest = release.version, .update_available = available, .updated = false, .method = how.method, .release_notes = notes };
+    const head = try c.fmt("Update available {s} → {s}\n  Release notes  {s}", .{ version, release.version, notes });
+    if (how.method == .development) {
+        return c.resultData("update", true, try c.fmt("This ec is a development build. The latest release is {s}.\nRebuild it from source, or install the release:\n\n    curl -fsSL https://github.com/{s}/releases/latest/download/install.sh | sh", .{ release.version, repoSlug(c) }), data);
+    }
+    if (!available) return c.resultData("update", true, try c.fmt("ec {s} is up to date.", .{version}), data);
+    if (check) {
+        const next = if (how.method == .standalone) "Run ec update to install it." else "Run ec update for the install command.";
+        return c.resultData("update", true, try c.fmt("{s}\n\n{s}", .{ head, next }), data);
+    }
+    switch (how.method) {
+        .package => return c.resultData("update", true, try c.fmt("{s}\n\nec was installed from the npm tarball. Install the new one:\n\n    gh release download v{s} --repo {s} --pattern ender-chest-{s}.tgz\n    npm install --global ./ender-chest-{s}.tgz", .{ head, release.version, repoSlug(c), release.version, release.version }), data),
+        .project => return c.resultData("update", true, try c.fmt("{s}\n\nec is a dependency of the project in {s}. Update ender-chest there.", .{ head, projectDir(how.exe) }), data),
+        else => {},
+    }
+    const bytes = try download(c, release) orelse return c.fail("ec {s} was not installed; {s} is unchanged.", .{ release.version, how.exe });
+    try replace(c, how.exe, bytes, release.version);
+    data.updated = true;
+    try c.resultData("update", true, try c.fmt("Updated ec {s} → {s}\n  Release notes  {s}", .{ version, release.version, notes }), data);
+}
+
+// Stages the new binary beside the old one, runs it once, then renames it into place.
+fn replace(c: *C, exe: []const u8, bytes: []const u8, v: []const u8) !void {
+    var random: [8]u8 = undefined;
+    std.Io.random(c.io, &random);
+    const dir = std.fs.path.dirname(exe) orelse ".";
+    const staged = try c.path(&.{ dir, try c.fmt(".ec-update-{x}", .{random}) });
+    c.write(staged, bytes, 0o755) catch return c.fail("Cannot write to {s}. Rerun the installer with EC_INSTALL_DIR set to a directory you own.", .{dir});
+    defer c.remove(staged) catch {};
+    const probe = c.capture(&.{ staged, "--version" }, null, 15) catch null;
+    const expected = try c.fmt("ec {s} ", .{v});
+    const ran = if (probe) |r| core.success(r.term) and std.mem.startsWith(u8, r.stdout, expected) else false;
+    if (!ran) return c.fail("The downloaded ec {s} did not run on this machine; {s} is unchanged.", .{ v, exe });
+    core.cwd().rename(staged, core.cwd(), exe, c.io) catch return c.fail("Cannot replace {s}.", .{exe});
+}
+
+// After an interactive command, says once a day when a newer release exists. The check sends one
+// request to GitHub at most once a day and gives up after about three seconds.
+pub fn notice(c: *C, command: @import("options.zig").Command) void {
+    switch (command) {
+        .verify, .push, .fleet, .plugin, .secret => {},
+        else => return,
+    }
+    if (c.json or updatesDisabled(c) or truthy(c.env.get("NO_UPDATE_NOTIFIER")) or truthy(c.env.get("CI"))) return;
+    if (!(std.Io.File.stdin().isTty(c.io) catch false) or !(c.stderr.isTty(c.io) catch false)) return;
+    const how = currentMethod(c) catch return;
+    if (how.method != .standalone and how.method != .package) return;
+    var state = loadState(c);
+    const now = nowSeconds(c.io);
+    if (due(state.checked_at, now)) {
+        state.checked_at = now;
+        if (latestTag(c)) |tag| state.latest = tag;
+        saveState(c, state);
+    }
+    if (!newer(state.latest, version) or !due(state.notified_at, now)) return;
+    c.log("Update available {s} → {s} · Run ec update", .{ version, state.latest }) catch return;
+    state.notified_at = now;
+    saveState(c, state);
+}
+fn truthy(value: ?[]const u8) bool {
+    const v = value orelse return false;
+    return v.len > 0 and !eq(u8, v, "0") and !eq(u8, v, "false");
+}
+// A clock that moved backwards makes a saved time due again.
+pub fn due(since: i64, now: i64) bool {
+    return now < since or now - since >= day_seconds;
+}
+const State = struct { checked_at: i64 = 0, latest: []const u8 = "", notified_at: i64 = 0 };
+fn statePath(c: *C) ![]const u8 {
+    return c.path(&.{ c.home, ".config/ender-chest/update-check.json" });
+}
+fn loadState(c: *C) State {
+    const v = c.readJson(statePath(c) catch return .{}) catch return .{};
+    if (v != .object) return .{};
+    const int = struct {
+        fn get(o: std.json.Value, key: []const u8) i64 {
+            const x = o.object.get(key) orelse return 0;
+            return if (x == .integer) x.integer else 0;
+        }
+    }.get;
+    return .{ .checked_at = int(v, "checked_at"), .latest = core.string(v, "latest") orelse "", .notified_at = int(v, "notified_at") };
+}
+fn saveState(c: *C, state: State) void {
+    const text = std.json.Stringify.valueAlloc(c.a, state, .{}) catch return;
+    c.write(statePath(c) catch return, text, 0o600) catch {};
+}
+fn recordLatest(c: *C, v: []const u8) void {
+    var state = loadState(c);
+    state.checked_at = nowSeconds(c.io);
+    state.latest = v;
+    saveState(c, state);
+}
+// The latest release's version from its tag, in one quick request.
+fn latestTag(c: *C) ?[]const u8 {
+    const token = githubToken(c) orelse "";
+    const url = c.fmt("https://api.github.com/repos/{s}/releases/latest", .{repoSlug(c)}) catch return null;
+    const body = request(c, token, url, "application/vnd.github+json", true) orelse return null;
+    const tag = core.string(c.parse(body) catch return null, "tag_name") orelse return null;
+    const v = if (std.mem.startsWith(u8, tag, "v")) tag[1..] else tag;
+    return if (validVersion(v)) v else null;
+}
+// The latest release with its manifest, read now rather than from a cache.
+fn freshRelease(c: *C) ?Release {
+    const release = if (c.env.get("EC_RELEASE_MANIFEST")) |path| (if (path.len > 0) readManifestFile(c, path) else null) else null;
+    const found = release orelse blk: {
+        const fetched = fetchRelease(c) orelse return null;
+        break :blk switch (fetched) {
+            .release => |r| r,
+            else => return null,
+        };
+    };
+    if (validVersion(found.version)) recordLatest(c, found.version);
+    return found;
 }
 
 const Asset = struct { name: []const u8, sha256: []const u8, path: []const u8, url: []const u8 };
@@ -186,6 +378,10 @@ fn readAsset(c: *C, release: Release, asset: Asset) ?[]const u8 {
 }
 
 fn https(c: *C, token: []const u8, url: []const u8, accept: []const u8) ?[]const u8 {
+    return request(c, token, url, accept, false);
+}
+// quick allows one attempt of about three seconds and stays silent, for the launch notice.
+fn request(c: *C, token: []const u8, url: []const u8, accept: []const u8, quick: bool) ?[]const u8 {
     if ((token.len > 0 and !validToken(token)) or !c.commandExists("curl")) return null;
     var random: [8]u8 = undefined;
     std.Io.random(c.io, &random);
@@ -198,8 +394,10 @@ fn https(c: *C, token: []const u8, url: []const u8, accept: []const u8) ?[]const
     const authorization = if (token.len > 0) c.fmt("header = \"Authorization: Bearer {s}\"\n", .{token}) catch return null else "";
     const config = c.fmt("{s}header = \"Accept: {s}\"\nheader = \"User-Agent: ec\"\n", .{ authorization, accept }) catch return null;
     c.write(cfg, config, 0o600) catch return null;
-    const result = c.capture(&.{ "curl", "-fsSL", "--retry", "3", "--max-time", "30", "--config", cfg, "-o", out, "--", url }, null, 45) catch return null;
+    const argv: []const []const u8 = if (quick) &.{ "curl", "-fsSL", "--max-time", "3", "--config", cfg, "-o", out, "--", url } else &.{ "curl", "-fsSL", "--retry", "3", "--max-time", "30", "--config", cfg, "-o", out, "--", url };
+    const result = c.capture(argv, null, if (quick) 5 else 45) catch return null;
     if (!core.success(result.term)) {
+        if (quick) return null;
         const missing = std.mem.indexOf(u8, result.stderr, "404") != null;
         if (missing) c.log("No ec release found. Private releases require GitHub access.", .{}) catch {} else c.log("Could not reach GitHub releases.", .{}) catch {};
         return if (missing) "" else null;
@@ -310,4 +508,28 @@ test "release slug and checksum" {
     try std.testing.expect(parseSlug("https://github.com/owner/config/extra") == null);
     const sum = sha256Hex("abc");
     try std.testing.expectEqualStrings("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", &sum);
+}
+
+test "versions compare by number and reject anything but X.Y.Z" {
+    try std.testing.expect(validVersion("0.0.1") and validVersion("10.20.30"));
+    for ([_][]const u8{ "dev", "", "1.2", "1.2.3.4", "01.2.3", "1.2.3-beta", "v1.2.3", "1..3" }) |bad| try std.testing.expect(!validVersion(bad));
+    try std.testing.expect(newer("0.0.10", "0.0.9") and newer("0.1.0", "0.0.99") and newer("1.0.0", "0.9.9"));
+    try std.testing.expect(!newer("0.0.9", "0.0.10") and !newer("0.0.5", "0.0.5"));
+    // A development build is never older or newer than a release.
+    try std.testing.expect(!newer("0.0.9", "dev") and !newer("dev", "0.0.1"));
+}
+
+test "install method follows where the binary lives" {
+    try std.testing.expectEqual(Method.development, method("dev", "/home/u/.local/bin/ec", false));
+    try std.testing.expectEqual(Method.standalone, method("0.0.5", "/home/u/.local/bin/ec", false));
+    try std.testing.expectEqual(Method.package, method("0.0.5", "/opt/homebrew/lib/node_modules/ender-chest/native/ec-aarch64-macos", false));
+    try std.testing.expectEqual(Method.package, method("0.0.5", "/home/u/.bun/install/global/node_modules/ender-chest/native/ec-x86_64-linux", true));
+    try std.testing.expectEqual(Method.package, method("0.0.5", "/home/u/.local/share/pnpm/global/v11/abc/node_modules/.pnpm/ender-chest@0.0.5/node_modules/ender-chest/native/ec-x86_64-linux", true));
+    try std.testing.expectEqual(Method.project, method("0.0.5", "/work/app/node_modules/ender-chest/native/ec-x86_64-linux", true));
+    try std.testing.expectEqualStrings("/work/app", projectDir("/work/app/node_modules/ender-chest/native/ec"));
+}
+
+test "update checks and notices are due once a day" {
+    try std.testing.expect(due(0, day_seconds) and !due(100, 100 + day_seconds - 1));
+    try std.testing.expect(due(100, 50));
 }
