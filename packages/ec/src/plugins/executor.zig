@@ -296,7 +296,7 @@ fn remote(c: *C, config: Config, action: []const u8) !void {
     };
     if (r.stderr.len > 0) try c.stderr.writeStreamingAll(c.io, r.stderr);
     if (r.term == .exited and r.term.exited == 255) return c.fail("Cannot SSH to {s}. This machine's SSH key must be allowed on the Executor host.", .{config.host});
-    if (r.term == .exited and r.term.exited == 2) return c.fail("The ec on {s} cannot manage Executor: it is too old or its config does not enable executor. Run ec fleet sync.", .{config.host});
+    if (r.term == .exited and r.term.exited == 2) return c.fail("The ec on {s} cannot manage Executor: it is too old or its config does not enable executor. Run ec sync --all.", .{config.host});
     if (!core.success(r.term)) return c.fail("ec executor {s} failed on {s}.", .{ action, config.host });
     const output = core.trim(r.stdout);
     if (eq(u8, action, "pair")) return c.resultData("executor pair", true, output, .{ .url = output });

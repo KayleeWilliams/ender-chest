@@ -77,9 +77,9 @@ To replace a token, first add its replacement on the host, run `ec secret set cl
 
 `ec cliproxyapi restart` expects a macOS launch agent named `io.cliproxyapi` on the host. From other machines it runs the same command on the host over SSH. It is not a generic service manager. For the Homebrew setup above, use `brew services restart cliproxyapi` on the host instead. Do not run both services on the same port.
 
-## Fleet
+## Other machines
 
-Fleet uses `tailscale status` to discover your account's macOS and Linux devices. Enable Remote Login on Macs, or SSH/Tailscale SSH on Linux. Connect over SSH once to verify host keys. `ec fleet` checks versions; `ec fleet sync` invokes sync on reachable devices that are behind. Each remote uses its own credentials and config checkout. There is no required central secrets server.
+`ec status` uses `tailscale status` to discover your account's macOS and Linux devices. Enable Remote Login on Macs, or SSH/Tailscale SSH on Linux. Connect over SSH once to verify host keys. `ec status` checks versions; `ec sync --all` runs sync on reachable devices that are behind. Each remote uses its own credentials and config checkout. There is no required central secrets server.
 
 ## Wake and shut down a desktop
 

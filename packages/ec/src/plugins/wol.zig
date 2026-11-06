@@ -153,7 +153,7 @@ fn send(c: *C, call: Call, local: bool) ![]const u8 {
     try c.log("Sending wake request through {s}...", .{relay});
     const r = c.capture(&.{ "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "ConnectionAttempts=1", relay, "\"$HOME/.local/bin/ec\" wol wake --local --no-wait" }, null, 20) catch return c.fail("Wake relay failed. Check SSH access to {s} and run ec sync there.", .{relay});
     if (r.stderr.len > 0) try c.stderr.writeStreamingAll(c.io, r.stderr);
-    if (r.term == .exited and r.term.exited == 2) return c.fail("The ec on {s} cannot relay: it is too old or its config does not enable wol. Run ec sync there, or ec fleet sync from here.", .{relay});
+    if (r.term == .exited and r.term.exited == 2) return c.fail("The ec on {s} cannot relay: it is too old or its config does not enable wol. Run ec sync there, or ec sync --all from here.", .{relay});
     if (r.term == .exited and r.term.exited == 255) return c.fail("Cannot SSH to the wake relay {s}. If the connection was refused, turn on Remote Login in its System Settings. On the machine's LAN, try ec wol wake --local.", .{relay});
     if (!core.success(r.term)) return c.fail("Wake relay failed. Check SSH access to {s}; on the machine's LAN, try ec wol wake --local.", .{relay});
     return c.fmt("Wake packet sent through {s}.", .{relay});

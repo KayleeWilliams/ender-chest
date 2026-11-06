@@ -205,7 +205,7 @@ fn replace(c: *C, exe: []const u8, bytes: []const u8, v: []const u8) !void {
 // request to GitHub at most once a day and gives up after about three seconds.
 pub fn notice(c: *C, command: @import("options.zig").Command) void {
     switch (command) {
-        .verify, .push, .fleet, .plugin, .secret => {},
+        .verify, .push, .status, .plugin, .secret => {},
         else => return,
     }
     if (c.json or updatesDisabled(c) or truthy(c.env.get("NO_UPDATE_NOTIFIER")) or truthy(c.env.get("CI"))) return;

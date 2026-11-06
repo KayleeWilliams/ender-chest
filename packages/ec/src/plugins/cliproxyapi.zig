@@ -106,7 +106,7 @@ fn restart(c: *C, call: Call, proxy: Proxy) !void {
     };
     if (r.stderr.len > 0) try c.stderr.writeStreamingAll(c.io, r.stderr);
     if (r.term == .exited and r.term.exited == 255) return c.fail("Cannot SSH to {s}. This machine's SSH key must be allowed on the proxy host.", .{host});
-    if (r.term == .exited and r.term.exited == 2) return c.fail("The ec on {s} cannot restart CLIProxyAPI: it is too old or its config does not enable cliproxyapi. Run ec fleet sync.", .{host});
+    if (r.term == .exited and r.term.exited == 2) return c.fail("The ec on {s} cannot restart CLIProxyAPI: it is too old or its config does not enable cliproxyapi. Run ec sync --all.", .{host});
     if (!core.success(r.term)) return c.fail("Restarting CLIProxyAPI on {s} failed.", .{host});
     try waitFor(c, proxy, proxy.base);
     try c.result("cliproxyapi restart", true, try c.fmt("CLIProxyAPI restarted on {s} and answers at {s}.", .{ host, proxy.base }));

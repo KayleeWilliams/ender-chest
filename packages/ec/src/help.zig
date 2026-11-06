@@ -38,9 +38,10 @@ const definitions = [_]Definition{
         .options = &(config ++ [_]Option{
             .{ .name = "skip-packages", .description = "Skip package installs and shell setup." },
             .{ .name = "update-skills", .description = "Refresh third-party skills from their Git repositories." },
+            .{ .name = "all", .description = "Sync every machine in the tailnet that is behind. Takes no other options except --json." },
         } ++ common),
-        .effects = &.{ "Applies the files, packages, setup steps, and plugins listed in ender-chest.toml, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "Installs a newer ec release first, then resumes with it. In a checkout with ec's sources, installs the release built from those sources or rebuilds with Zig. Development builds are never replaced by a release. EC_NO_UPDATE=1 skips the release check.", "Installs packages unless --skip-packages is set." },
-        .examples = &.{ "ec sync", "ec sync --skip-packages", "ec sync --repo ~/dev/ender-chest --profile cloud --json" },
+        .effects = &.{ "Applies the files, packages, setup steps, and plugins listed in ender-chest.toml, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "Installs a newer ec release first, then resumes with it. In a checkout with ec's sources, installs the release built from those sources or rebuilds with Zig. Development builds are never replaced by a release. EC_NO_UPDATE=1 skips the release check.", "Installs packages unless --skip-packages is set.", "With --all, syncs this machine and every other reachable machine that is behind, one at a time over SSH, with ec sync --skip-packages. Skips machines that are current, offline, or unreachable. Any failed sync returns exit code 1." },
+        .examples = &.{ "ec sync", "ec sync --skip-packages", "ec sync --all", "ec sync --repo ~/dev/ender-chest --profile cloud --json" },
     },
     .{
         .command = "push",
@@ -59,22 +60,12 @@ const definitions = [_]Definition{
         .examples = &.{ "ec verify", "ec verify --json" },
     },
     .{
-        .command = "fleet",
-        .action = "status",
-        .usage = "ec fleet status [options]",
+        .command = "status",
+        .usage = "ec status [options]",
         .description = "Show each machine's ec version and config commit.",
         .options = &common,
-        .effects = &.{ "ec fleet alone runs status. Lists your macOS and Linux machines from tailscale status, then reads ec --version over SSH.", "Compares each machine with the latest GitHub release and the config repo's main branch. Makes no changes.", "Machines need SSH access: Remote Login on Macs, SSH or Tailscale SSH on Linux." },
-        .examples = &.{ "ec fleet", "ec fleet status --json" },
-    },
-    .{
-        .command = "fleet",
-        .action = "sync",
-        .usage = "ec fleet sync [options]",
-        .description = "Run ec sync --skip-packages on every machine that is behind.",
-        .options = &common,
-        .effects = &.{ "Syncs this machine locally and other reachable machines over SSH, one at a time. Each sync overwrites that machine's managed home files.", "Skips machines that are current, offline, or unreachable. Any failed sync returns exit code 1." },
-        .examples = &.{ "ec fleet sync", "ec fleet sync --json" },
+        .effects = &.{ "Lists your macOS and Linux machines from tailscale status, then reads ec --version over SSH.", "Compares each machine with the latest GitHub release and the config repo's main branch. Makes no changes.", "Machines need SSH access: Remote Login on Macs, SSH or Tailscale SSH on Linux." },
+        .examples = &.{ "ec status", "ec status --json" },
     },
     .{
         .command = "plugin",
@@ -151,7 +142,7 @@ fn optionRows(c: *core.Context, text: *std.ArrayList(u8), entries: []const Optio
     }
 }
 fn grouped(o: Options) bool {
-    return o.command == .fleet or o.command == .plugin or o.command == .secret;
+    return o.command == .plugin or o.command == .secret;
 }
 fn detail(c: *core.Context, text: *std.ArrayList(u8), entry: Definition) !void {
     try append(c, text, "{s}\n\nUsage: {s}\n\nOptions:\n", .{ entry.description, entry.usage });
@@ -168,7 +159,7 @@ pub fn show(c: *core.Context, o: Options, plugins: []const plugin.Plugin) !void 
         if (grouped(o) and o.action.len > 0 and !core.eql(u8, entry.action, o.action)) continue;
         try entries.append(c.a, entry);
     }
-    // Explicit actions such as `ec fleet sync --help` narrow to one entry; the default action does not.
+    // Explicit actions such as `ec plugin update --help` narrow to one entry; the default action does not.
     if (grouped(o) and entries.items.len == 1 and !explicit(o)) {
         entries.clearRetainingCapacity();
         for (definitions) |entry| if (core.eql(u8, entry.command, @tagName(o.command))) try entries.append(c.a, entry);
@@ -187,7 +178,6 @@ pub fn show(c: *core.Context, o: Options, plugins: []const plugin.Plugin) !void 
                 if (entry.action.len > 0 or core.eql(u8, entry.command, "version")) continue;
                 try append(c, &text, "  {s:<12} {s}\n", .{ entry.command, entry.description });
             }
-            try append(c, &text, "  fleet        Show or update ec on every machine in the tailnet.\n", .{});
             try append(c, &text, "  plugin       List enabled plugins or update one from GitHub.\n", .{});
             try append(c, &text, "  secret       Save, list, or remove secrets that plugin settings use.\n", .{});
             if (plugins.len > 0) {
@@ -202,7 +192,6 @@ pub fn show(c: *core.Context, o: Options, plugins: []const plugin.Plugin) !void 
         try optionRows(c, &text, &common);
         if (!grouped(o)) try append(c, &text, "  --version               Show the CLI version.\n", .{});
         try append(c, &text, "\nUse {s} <command> --help for options, effects, and examples.\nAdd --json for structured command definitions.\n", .{scope});
-        if (o.command == .fleet) try append(c, &text, "\nExamples:\n  ec fleet\n  ec fleet sync\n", .{});
     }
     try append(c, &text, "\nExit codes: 0 success, 1 operation failed or unreachable, 2 invalid arguments.\n", .{});
     try c.resultData("help", true, text.items, .{ .command_definitions = entries.items });
