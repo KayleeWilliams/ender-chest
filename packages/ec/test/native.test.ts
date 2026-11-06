@@ -152,14 +152,14 @@ describe("native ec", () => {
         "profile",
         "skip-packages",
         "update-skills",
+        "all",
         "json",
         "help",
       ],
     },
     { args: ["push"], flags: ["repo", "profile", "dry-run", "json", "help"] },
     { args: ["verify"], flags: ["repo", "profile", "json", "help"] },
-    { args: ["fleet", "status"], flags: ["json", "help"] },
-    { args: ["fleet", "sync"], flags: ["json", "help"] },
+    { args: ["status"], flags: ["json", "help"] },
     { args: ["plugin", "list"], flags: ["repo", "json", "help"] },
     { args: ["secret", "set"], flags: ["json", "help"] },
   ])(
@@ -219,7 +219,15 @@ describe("native ec", () => {
   it.each([
     { args: ["sync", "--profile"], message: "--profile needs a profile name" },
     { args: ["sync", "--repo", ""], message: "--repo needs a checkout path." },
-    { args: ["fleet", "update"], message: "Use status or sync." },
+    { args: ["status", "sync"], message: "Unknown command or option." },
+    {
+      args: ["sync", "--all", "--profile", "mac"],
+      message: "takes no other options",
+    },
+    {
+      args: ["verify", "--all"],
+      message: "--all is only available with ec sync.",
+    },
   ])(
     "explains invalid arguments in human and JSON output: $args",
     ({ args, message }) => {
@@ -253,7 +261,7 @@ describe("native ec", () => {
   it.each([
     ["sync", "--profile"],
     ["verify", "--dry-run"],
-    ["fleet", "--no-wait"],
+    ["status", "--no-wait"],
     ["sync", "push"],
     ["--nope"],
   ])("rejects invalid arguments without writes: %j", (...args) => {
@@ -847,7 +855,7 @@ describe("native ec", () => {
   });
 });
 
-describe("native fleet", () => {
+describe("native status and sync --all", () => {
   const fleet = (fetches = true) => {
     const f = fixture();
     const hash = sourceHash(cliRoot);
@@ -924,7 +932,7 @@ const now=fs.existsSync(${JSON.stringify(state)});console.log(JSON.stringify({sc
   };
   it("lists this account's computers with versions and offline machines", () => {
     const f = fleet();
-    const r = f.run(["fleet", "--json"]);
+    const r = f.run(["status", "--json"]);
     expect(r.status, r.stderr).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(result.data.release).toMatchObject({ version: "0.0.9" });
@@ -943,7 +951,7 @@ const now=fs.existsSync(${JSON.stringify(state)});console.log(JSON.stringify({sc
   });
   it("syncs only machines that are behind and reports their new versions", () => {
     const f = fleet();
-    const r = f.run(["fleet", "sync", "--json"]);
+    const r = f.run(["sync", "--all", "--json"]);
     expect(r.status, r.stderr).toBe(0);
     const result = JSON.parse(r.stdout);
     expect(
@@ -960,7 +968,7 @@ const now=fs.existsSync(${JSON.stringify(state)});console.log(JSON.stringify({sc
   });
   it("fails when a machine is still behind after a sync that could not fetch", () => {
     const f = fleet(false);
-    const r = f.run(["fleet", "sync", "--json"]);
+    const r = f.run(["sync", "--all", "--json"]);
     expect(r.status).toBe(1);
     expect(JSON.parse(r.stdout)).toMatchObject({
       error: { code: "sync_failed" },

@@ -30,7 +30,7 @@ pub fn run(c: *C, o: O) !bool {
     const expected = try latest(c);
     const machines = try discover(c);
     for (machines) |*m| try probe(c, m, expected);
-    if (core.eql(u8, o.action, "sync")) {
+    if (o.all) {
         var failed: usize = 0;
         var synced: usize = 0;
         for (machines) |*m| {
@@ -52,10 +52,10 @@ pub fn run(c: *C, o: O) !bool {
         const text = try report(c, machines, expected);
         if (failed > 0) c.error_code = "sync_failed";
         const summary = if (synced + failed == 0) "Nothing to sync." else try c.fmt("Synced {d} machine(s); {d} failed.", .{ synced, failed });
-        try c.resultData("fleet sync", failed == 0, try c.fmt("{s}\n{s}", .{ text, summary }), .{ .release = expected, .machines = machines });
+        try c.resultData("sync --all", failed == 0, try c.fmt("{s}\n{s}", .{ text, summary }), .{ .release = expected, .machines = machines });
         return failed == 0;
     }
-    try c.resultData("fleet status", true, try report(c, machines, expected), .{ .release = expected, .machines = machines });
+    try c.resultData("status", true, try report(c, machines, expected), .{ .release = expected, .machines = machines });
     return true;
 }
 
@@ -208,7 +208,7 @@ fn report(c: *C, machines: []const Machine, expected: Expected) ![]const u8 {
     }
     try text.appendSlice(c.a, try c.fmt("\n{d} of {d} machines current.", .{ current, machines.len }));
     for (machines) |m| if (eq(u8, m.state, "behind")) {
-        try text.appendSlice(c.a, " Run ec fleet sync to update the reachable ones.");
+        try text.appendSlice(c.a, " Run ec sync --all to update the reachable ones.");
         break;
     };
     return text.items;

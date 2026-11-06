@@ -67,11 +67,11 @@ Add a remote for your config repo if you want to sync between machines. Keep tha
 
 ```sh
 ec sync                     # pull and apply this machine's config
+ec sync --all               # sync every reachable machine that is behind
 ec push                     # capture portable config, commit, and push
 ec push --dry-run           # capture into the checkout without committing
 ec verify                   # read-only checks
-ec fleet                    # inspect machines over Tailscale and SSH
-ec fleet sync               # sync reachable machines that are behind
+ec status                   # every machine's ec version, over Tailscale and SSH
 ec plugin list              # show enabled plugins and their commands
 ec secret set NAME          # save a secret that plugin settings use
 ```

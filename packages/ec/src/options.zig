@@ -2,10 +2,10 @@ const std = @import("std");
 const core = @import("core.zig");
 const eq = core.eql;
 
-pub const Command = enum { help, version, sync, push, verify, fleet, plugin, secret, update, builtin, call };
+pub const Command = enum { help, version, sync, push, verify, status, plugin, secret, update, builtin, call };
 pub const Options = struct {
     command: Command = .help,
-    // Subcommand of fleet, plugin, or secret.
+    // Subcommand of plugin or secret.
     action: []const u8 = "",
     // NAME for plugin update, secret set, and secret remove.
     target: ?[]const u8 = null,
@@ -16,6 +16,8 @@ pub const Options = struct {
     skip_packages: bool = false,
     update_skills: bool = false,
     dry_run: bool = false,
+    // ec sync --all syncs every machine in the tailnet.
+    all: bool = false,
     // ec update --check reports without installing.
     check: bool = false,
     // For .call, the plugin name; its arguments follow in rest, unparsed. For .builtin, rest
@@ -24,7 +26,6 @@ pub const Options = struct {
     rest: []const []const u8 = &.{},
 };
 const actions = [_]struct { command: Command, names: []const []const u8, target: enum { none, optional, required } }{
-    .{ .command = .fleet, .names = &.{ "status", "sync" }, .target = .none },
     .{ .command = .plugin, .names = &.{"list"}, .target = .none },
     .{ .command = .plugin, .names = &.{"update"}, .target = .required },
     .{ .command = .secret, .names = &.{"list"}, .target = .none },
@@ -96,13 +97,17 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
             o.check = true;
             continue;
         }
+        if (eq(u8, arg, "--all")) {
+            o.all = true;
+            continue;
+        }
         if (!command) {
             if (std.mem.startsWith(u8, arg, "-")) {
                 diagnostic.* = "Unknown option. Run ec --help for available options.";
                 return error.UnknownArgument;
             }
             command = true;
-            o.command = if (eq(u8, arg, "sync")) .sync else if (eq(u8, arg, "push") or eq(u8, arg, "--push")) .push else if (eq(u8, arg, "verify")) .verify else if (eq(u8, arg, "fleet")) .fleet else if (eq(u8, arg, "plugin")) .plugin else if (eq(u8, arg, "secret")) .secret else if (eq(u8, arg, "update")) .update else if (@import("manifest.zig").pluginName(arg)) .call else {
+            o.command = if (eq(u8, arg, "sync")) .sync else if (eq(u8, arg, "push") or eq(u8, arg, "--push")) .push else if (eq(u8, arg, "verify")) .verify else if (eq(u8, arg, "status")) .status else if (eq(u8, arg, "plugin")) .plugin else if (eq(u8, arg, "secret")) .secret else if (eq(u8, arg, "update")) .update else if (@import("manifest.zig").pluginName(arg)) .call else {
                 diagnostic.* = "Unknown command. Run ec --help for available commands.";
                 return error.UnknownArgument;
             };
@@ -114,14 +119,13 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
             }
             continue;
         }
-        if ((o.command == .fleet or o.command == .plugin or o.command == .secret) and o.action.len == 0) {
+        if ((o.command == .plugin or o.command == .secret) and o.action.len == 0) {
             const known = outer: for (actions) |entry| {
                 if (entry.command != o.command) continue;
                 for (entry.names) |n| if (eq(u8, n, arg)) break :outer true;
             } else false;
             if (!known) {
                 diagnostic.* = switch (o.command) {
-                    .fleet => "Unknown fleet command. Use status or sync. Run ec fleet --help.",
                     .plugin => "Unknown plugin command. Use list or update. Run ec plugin --help.",
                     else => "Unknown secret command. Use set, list, or remove. Run ec secret --help.",
                 };
@@ -143,6 +147,14 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
         diagnostic.* = "--dry-run is only available with ec push. It still captures files into the checkout.";
         return error.InvalidArguments;
     }
+    if (o.all and o.command != .sync) {
+        diagnostic.* = "--all is only available with ec sync.";
+        return error.InvalidArguments;
+    }
+    if (o.all and (o.repo != null or o.profile.len > 0 or o.skip_packages or o.update_skills)) {
+        diagnostic.* = "ec sync --all runs ec sync --skip-packages on each machine and takes no other options except --json.";
+        return error.InvalidArguments;
+    }
     if (o.check and o.command != .update) {
         diagnostic.* = "--check is only available with ec update.";
         return error.InvalidArguments;
@@ -159,11 +171,10 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
         diagnostic.* = "--repo does not apply to ec update. It updates the ec binary you ran.";
         return error.InvalidArguments;
     }
-    if (o.command == .fleet and o.repo != null) {
-        diagnostic.* = "--repo applies to sync, push, verify, and plugins. Fleet reads machines from Tailscale.";
+    if (o.command == .status and o.repo != null) {
+        diagnostic.* = "--repo applies to sync, push, verify, and plugins. ec status reads machines from Tailscale.";
         return error.InvalidArguments;
     }
-    if (o.command == .fleet and o.action.len == 0) o.action = "status";
     if (o.command == .plugin and o.action.len == 0) o.action = "list";
     if (o.command == .secret and o.action.len == 0) {
         diagnostic.* = "ec secret needs set, list, or remove. Run ec secret --help.";
@@ -181,10 +192,14 @@ pub fn parseDetailed(args: []const []const u8, diagnostic: *[]const u8) !Options
 test "core commands, plugin calls, and bad arguments" {
     try std.testing.expectError(error.MissingValue, parse(&.{ "sync", "--profile" }));
     try std.testing.expectError(error.InvalidArguments, parse(&.{ "verify", "--dry-run" }));
-    try std.testing.expectError(error.UnknownArgument, parse(&.{ "fleet", "--no-wait" }));
+    try std.testing.expectError(error.UnknownArgument, parse(&.{ "status", "--no-wait" }));
+    try std.testing.expectError(error.UnknownArgument, parse(&.{ "status", "sync" }));
+    try std.testing.expectError(error.InvalidArguments, parse(&.{ "verify", "--all" }));
+    try std.testing.expectError(error.InvalidArguments, parse(&.{ "sync", "--all", "--skip-packages" }));
+    try std.testing.expect((try parse(&.{ "sync", "--all" })).all);
+    try std.testing.expect((try parse(&.{"status"})).command == .status);
     try std.testing.expectError(error.UnknownArgument, parse(&.{"Desktop"}));
     try std.testing.expectError(error.InvalidArguments, parse(&.{ "secret", "set" }));
-    try std.testing.expect(eq(u8, (try parse(&.{"fleet"})).action, "status"));
     try std.testing.expect(eq(u8, (try parse(&.{ "secret", "set", "executor" })).target.?, "executor"));
     const call = try parse(&.{ "--json", "wol", "wake", "--via", "user@relay", "--help" });
     try std.testing.expect(call.command == .call and call.json and !call.show_help and eq(u8, call.name, "wol") and call.rest.len == 4);

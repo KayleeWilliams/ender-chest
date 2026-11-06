@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) void {
 }
 fn label(c: *core.Context, o: options.Options) []const u8 {
     return switch (o.command) {
-        .fleet, .plugin, .secret => c.fmt("{s} {s}", .{ @tagName(o.command), o.action }) catch @tagName(o.command),
+        .plugin, .secret => c.fmt("{s} {s}", .{ @tagName(o.command), o.action }) catch @tagName(o.command),
         .call => if (o.rest.len > 0 and !std.mem.startsWith(u8, o.rest[0], "-")) c.fmt("{s} {s}", .{ o.name, o.rest[0] }) catch o.name else o.name,
         .builtin => if (o.rest.len > 1) c.fmt("{s} {s}", .{ o.rest[0], o.rest[1] }) catch "plugin" else "plugin",
         else => @tagName(o.command),
@@ -42,7 +42,10 @@ fn execute(c: *core.Context, o: options.Options) !void {
     if (o.command == .help or (o.show_help and o.command != .call)) return @import("help.zig").show(c, o, enabled(c, o));
     if (c.home.len == 0) return c.fail("HOME is not set.", .{});
     switch (o.command) {
-        .fleet => if (!try @import("fleet.zig").run(c, o)) std.process.exit(1),
+        .status => if (!try @import("fleet.zig").run(c, o)) std.process.exit(1),
+        .sync => if (o.all) {
+            if (!try @import("fleet.zig").run(c, o)) std.process.exit(1);
+        } else try @import("sync.zig").run(c, o),
         .secret => try @import("secrets.zig").run(c, o.action, o.target),
         .update => try @import("update.zig").run(c, o.check),
         .plugin => {
