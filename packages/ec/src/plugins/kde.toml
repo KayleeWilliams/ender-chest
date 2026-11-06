@@ -1,0 +1,49 @@
+name = "kde"
+description = "Unlock KWallet and shut down a KDE Plasma machine over SSH."
+run = "ec:kde"
+
+[settings.host]
+required = true
+description = "SSH host of the KDE machine, as HOST or USER@HOST."
+
+[settings.wait_seconds]
+type = "integer"
+default = 180
+description = "How long shutdown waits for the machine to stop answering, and unlock --wait for its session to start."
+
+[[commands]]
+name = "unlock"
+description = "Unlock KWallet using a password saved in this Mac's Keychain."
+usage = "ec kde unlock [--setup | --forget | --local] [--wait]"
+effects = [
+  "Sends the saved password to the machine's KWallet over SSH. macOS may show a Keychain access dialog.",
+  "Use only one of --setup, --forget, or --local. Setup and --local need a terminal and refuse --json.",
+  "The machine needs Python 3, python-dbus, and KWallet 6.29 or newer. ec sends its helper over SSH, so the machine does not need ec.",
+  "With --wait, retries for up to wait_seconds while a machine that just woke starts its session.",
+]
+examples = [
+  "ec kde unlock --setup",
+  "ec kde unlock",
+  "ec kde unlock --wait",
+  "ec kde unlock --forget",
+  "ec kde unlock --local",
+]
+options = [
+  { name = "setup", description = "Confirm SSH access and save the wallet password in this Mac's Keychain." },
+  { name = "forget", description = "Remove the wallet password saved on this Mac." },
+  { name = "local", description = "Prompt for the password and unlock this Linux machine's wallet." },
+  { name = "wait", description = "Keep retrying while the machine's session starts, as after a wake. Use it in wol's after_wake." },
+]
+
+[[commands]]
+name = "shutdown"
+description = "Log out and shut down, as the Plasma menu does."
+usage = "ec kde shutdown [--no-wait]"
+effects = [
+  "Asks KDE over SSH to log out and power off. Apps can still block logout.",
+  "Waits up to wait_seconds for the machine to stop answering.",
+]
+examples = ["ec kde shutdown", "ec kde shutdown --no-wait --json"]
+options = [
+  { name = "no-wait", description = "Request shutdown and exit without waiting." },
+]

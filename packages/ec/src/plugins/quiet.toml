@@ -1,0 +1,19 @@
+name = "quiet"
+description = "Stop stale dev servers and containers before a benchmark."
+run = "ec:quiet"
+default = "stop"
+
+[[commands]]
+name = "stop"
+description = "Stop stale dev servers, watchers, headless browsers, and containers."
+usage = "ec quiet [stop] [--all] [--dry-run]"
+effects = [
+  "Stops dev servers, file watchers, and headless browsers that have run for 2 hours or whose worktree was deleted.",
+  "Keeps processes in the current Git worktree, the agent that called ec, and anything run by agent CLIs.",
+  "Stops all running Docker containers.",
+]
+examples = ["ec quiet", "ec quiet --dry-run", "ec quiet --all --json"]
+options = [
+  { name = "all", description = "Also stop dev processes started in the last 2 hours." },
+  { name = "dry-run", description = "List what would stop without stopping it." },
+]

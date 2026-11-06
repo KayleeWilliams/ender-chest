@@ -170,7 +170,7 @@ describe("release packaging", () => {
     expect(JSON.parse(help.stdout).ok).toBe(true);
     const bad = spawnSync(ec, ["unknown-command"], { encoding: "utf-8", env });
     expect(bad.status).toBe(2);
-    expect(bad.stderr).toContain("Unknown command or option");
+    expect(bad.stderr).toContain("Unknown command unknown-command");
   });
 
   it.each(["checksum", "source hash", "native target"])(

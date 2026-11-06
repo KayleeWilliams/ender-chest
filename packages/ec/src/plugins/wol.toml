@@ -1,0 +1,60 @@
+name = "wol"
+description = "Wake a machine with Wake-on-LAN and wait until it answers."
+run = "ec:wol"
+
+[settings.mac]
+required = true
+description = "MAC address of the machine to wake, as aa:bb:cc:dd:ee:ff."
+
+[settings.broadcast]
+required = true
+description = "Broadcast address of the machine's LAN, such as 192.0.2.255."
+
+[settings.host]
+required = true
+description = "Hostname that answers once the machine is awake, such as its Tailscale name."
+
+[settings.port]
+type = "integer"
+default = 9
+description = "UDP port for the wake packet."
+
+[settings.relay]
+description = "SSH host on the machine's LAN that sends the packet when you are elsewhere. USER@HOST works. Needs ec and this config."
+
+[settings.wait_seconds]
+type = "integer"
+default = 180
+description = "How long to wait for the machine to answer."
+
+[settings.after_wake]
+description = "An ec command to run once the machine answers, such as \"kde unlock --wait\"."
+
+[[commands]]
+name = "wake"
+description = "Wake the machine and wait until it answers."
+usage = "ec wol wake [--local | --via USER@HOST] [--no-wait] [--skip-after]"
+effects = [
+  "Skips the packet when the machine already answers. On its LAN, sends the packet directly; elsewhere, asks the relay over SSH to send it.",
+  "Waits up to wait_seconds, then runs after_wake if it is set. No answer returns exit code 1.",
+]
+examples = [
+  "ec wol wake",
+  "ec wol wake --no-wait",
+  "ec wol wake --via user@relay --json",
+]
+options = [
+  { name = "local", description = "Send the packet directly on this LAN. Cannot combine with --via." },
+  { name = "via", type = "string", description = "SSH relay, as HOST or USER@HOST. Overrides the relay setting." },
+  { name = "no-wait", description = "Send the packet and exit without waiting." },
+  { name = "skip-after", description = "Wait, but do not run after_wake." },
+]
+
+[[commands]]
+name = "status"
+description = "Check whether the machine answers."
+usage = "ec wol status"
+effects = [
+  "Pings host. Reports reachability, not power state. No answer returns exit code 1.",
+]
+examples = ["ec wol status", "ec wol status --json"]

@@ -55,7 +55,7 @@ cp -R ~/ender-chest/examples/config ~/my-machine-config
 git -C ~/my-machine-config init
 ```
 
-The [starter guide](examples/config/README.md) explains the shared `AGENTS.md`, Claude/Codex/Grok preferences, bundled review skill, and device-local overrides. Edit the shared instructions to match how you work. Set your Git identity in `~/.gitconfig.local`. Replace the desktop hosts and proxy URL if you use those optional commands. The example contains no credentials and enables no MCP server.
+The [starter guide](examples/config/README.md) explains the shared `AGENTS.md`, Claude/Codex/Grok preferences, bundled review skill, and device-local overrides. Edit the shared instructions to match how you work. Set your Git identity in `~/.gitconfig.local`. The example contains no credentials and enables no plugins.
 
 For instructions tied to an individual codebase, see the separate [project example](examples/project/README.md).
 
@@ -64,9 +64,9 @@ ec sync --repo ~/my-machine-config --skip-packages
 ec verify
 ```
 
-Sync writes the managed home files, including shell and Git config. Back up existing files and merge any settings you want to keep into your config or the `.local` overrides first. This version uses the fixed managed-file list in `packages/ec/src/sync.zig`; it is an opinionated config layout.
+Sync writes the home files listed in `ender-chest.toml`, including shell and Git config. The first time it replaces a file that differs, it keeps your old copy under `~/.config/ender-chest/backup/`.
 
-`--skip-packages` avoids package installation and shell framework setup. Without it, sync may install Homebrew, packages from your Brewfiles, Oh My Zsh, shell plugins, and a Node version through fnm.
+`--skip-packages` skips Brewfiles and setup steps. Without it, the starter's sync installs Homebrew if needed, its Brewfiles, Oh My Zsh, shell plugins, and a Node version through fnm.
 
 Add a remote for your config repo if you want to sync between machines. Keep that repo private if it contains personal hostnames or other private settings. The CLI source and release history remain separate from your config.
 
@@ -79,11 +79,8 @@ ec push --dry-run           # capture into the checkout without committing
 ec verify                   # read-only checks
 ec fleet                    # inspect machines over Tailscale and SSH
 ec fleet sync               # sync reachable machines that are behind
-ec cliproxy setup           # save a token locally through a hidden prompt
-ec cliproxy models          # query your proxy
-ec cliproxy run your-tool   # pass proxy credentials to one process
-ec desktop start            # wake a configured desktop
-ec desktop stop             # request shutdown through KDE
+ec plugin list              # show enabled plugins and their commands
+ec secret set NAME          # save a secret that plugin settings use
 ```
 
 `push --dry-run` still writes files into the checkout. A push does not update other machines. A dirty checkout skips pulling and applies local files. A failed pull also applies local files with a warning.
@@ -92,23 +89,58 @@ Use `ec <command> --help` for options and effects. `--json` produces one result 
 
 Config selection is `--repo`, then `EC_REPO`, then a config checkout in the current directory, then the path saved by the last sync. An implicitly selected linked worktree resolves to its primary checkout. Use `--repo` to apply a particular worktree.
 
-## Proxy credentials
+## ender-chest.toml
 
-CLIProxyAPI is optional. Set up your own host using [the setup guide](docs/setup.md), then run this on each client device:
+`ender-chest.toml` at the root of your config repo lists what sync applies:
 
-```sh
-ec cliproxy setup --url https://YOUR-PROXY-HOST:8317
-ec sync --skip-packages
-ec cliproxy models
+```toml
+files = [
+  ".zshrc",
+  { path = ".ssh/config", mode = "600" },
+  { path = ".config/zed/settings.json", profiles = ["mac"] },
+  { path = ".gitconfig.local", from = "git/gitconfig.local.example", once = true },
+]
+
+[packages]
+brewfiles = ["tools/Brewfile", { path = "tools/Brewfile.mac", profiles = ["mac"] }]
+
+[[setup]]
+name = "Oh My Zsh"
+creates = "~/.oh-my-zsh"
+run = "curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh"
+
+[plugins.executor]
+url = "https://mcp.example.test:4312"
+key = { secret = "executor" }
 ```
 
-Put the same endpoint in your config repo's `home/.config/cliproxyapi/client.json` so later syncs keep using it. The setup prompt hides the token. The CLI stores it in `~/.config/ender-chest/secrets/cliproxyapi.json` with mode `0600`, inside a directory with mode `0700`. The synced endpoint file contains only `baseURL`.
+- `files` copies `home/<path>` in the checkout to `~/<path>`. `mode`, `os` (`macos` or `linux`), and `profiles` narrow an entry, and `from` reads a different checkout path. A `once` file is created when missing and then belongs to the machine: sync never overwrites it and push never captures it.
+- `[packages]` Brewfiles and `[[setup]]` steps run on each sync. Steps run with `/bin/sh` from the checkout. A step whose `creates` path exists is skipped. `os` and `profiles` work here too.
+- `ec push` copies the other listed files back into the checkout. It stages only `home/`, `skills/`, `agents/`, `plugins/`, `ender-chest.toml`, `ender-chest.lock`, and `from` paths.
 
-For automation, feed a token from a credential manager through stdin with `ec cliproxy setup --key-stdin`. Do not put tokens in command arguments or shell history. JSON mode requires `--key-stdin`.
+The profile is `mac` on macOS and `cloud` elsewhere, or when a CI or cloud-agent variable is set. Pass `--profile NAME` to choose one.
 
-Sync applies the local token to Claude Code, Codex, and Grok settings. Those generated settings also contain credentials and must stay on-device. Push does not capture them. Without a local token, sync preserves existing agent authentication and explains how to configure the proxy.
+## Plugins
 
-See [credential handling](SECURITY.md) for storage and upload behavior.
+Plugins add commands to `ec`, and can give Claude Code, Codex, and Grok an MCP server or a model provider. These ship with `ec`:
+
+| Plugin | Use |
+| --- | --- |
+| `cliproxyapi` | Route the agents through a [CLIProxyAPI](docs/setup.md#cliproxyapi-host) server. |
+| `executor` | Share one Executor MCP server across machines. |
+| `wol` | Wake a machine with Wake-on-LAN and wait until it answers. |
+| `kde` | Unlock KWallet and shut down a KDE Plasma machine over SSH. |
+| `quiet` | Stop stale dev servers and containers before a benchmark. |
+
+Enable one with a `[plugins.NAME]` table. `ec NAME --help` lists its commands and settings. When you remove a plugin and sync, `ec` removes what it added to agent settings and keeps your other MCP servers and providers.
+
+You can write your own plugin in any language and load it from your config repo or a GitHub repository. See [plugins](docs/plugins.md).
+
+## Secrets
+
+`ec secret set NAME` reads a value from a hidden prompt, or from stdin when piped, and stores it in `~/.config/ender-chest/secrets/NAME` with mode `0600`. Refer to it from a plugin setting as `{ secret = "NAME" }`. `ec secret list` prints names only, and `ec secret remove NAME` deletes one.
+
+Secrets stay on the machine. Sync writes the ones that plugins contribute into agent settings, so those settings stay on-device too. Push does not capture them, and it refuses a checkout that contains a secret file. See [credential handling](SECURITY.md).
 
 ## Updates
 

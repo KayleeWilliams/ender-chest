@@ -1,7 +1,0 @@
-# Optional shared HTTP MCP server. Replace the URL before uncommenting.
-# ec currently shares only the server named "executor". It adds missing entries
-# and keeps existing device entries. Configure credentials in each client,
-# never in this file or in a URL query parameter.
-#
-# [mcp_servers.executor]
-# url = "https://mcp.example.test/mcp"

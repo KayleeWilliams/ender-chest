@@ -1,0 +1,94 @@
+# What ec sync applies to a machine. See the Ender Chest docs for every key.
+
+# Home files. Each path maps home/<path> in this checkout to ~/<path>.
+# A `once` file is created when missing, then left to the machine: sync never
+# overwrites it and ec push never captures it.
+files = [
+  ".gitconfig",
+  ".zshrc",
+  ".zprofile",
+  ".config/git/ignore",
+  { path = ".config/shell/macos.zsh", profiles = [
+    "mac",
+  ] },
+  { path = ".config/shell/macos.zprofile", profiles = [
+    "mac",
+  ] },
+  { path = ".config/zed/settings.json", profiles = [
+    "mac",
+  ] },
+  { path = ".ssh/config", mode = "600" },
+  { path = ".gitconfig.local", from = "git/gitconfig.local.example", once = true },
+  { path = ".config/git/identity.work", from = "git/identity.work.example", once = true },
+  { path = ".zshrc.local", from = "shell/zshrc.local.example", once = true },
+  { path = ".zprofile.local", once = true },
+  { path = ".ssh/config.local", from = "tools/ssh/config.local.example", mode = "600", once = true },
+]
+
+# Homebrew bundles. ec sync --skip-packages skips these and the setup steps.
+[packages]
+brewfiles = [
+  "tools/Brewfile",
+  { path = "tools/Brewfile.mac", profiles = [
+    "mac",
+  ] },
+]
+
+# Setup steps run from this checkout with /bin/sh. A step whose `creates` path
+# exists is skipped.
+[[setup]]
+name = "Oh My Zsh"
+creates = "~/.oh-my-zsh"
+run = "curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh"
+
+[[setup]]
+name = "zsh-autosuggestions"
+creates = "~/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+run = 'git clone --depth 1 https://github.com/zsh-users/zsh-autosuggestions.git "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions"'
+
+[[setup]]
+name = "zsh-syntax-highlighting"
+creates = "~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
+run = 'git clone --depth 1 https://github.com/zsh-users/zsh-syntax-highlighting.git "$HOME/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"'
+
+[[setup]]
+name = "zsh-completions"
+creates = "~/.oh-my-zsh/custom/plugins/zsh-completions"
+run = 'git clone --depth 1 https://github.com/zsh-users/zsh-completions.git "$HOME/.oh-my-zsh/custom/plugins/zsh-completions"'
+
+[[setup]]
+name = "Node"
+run = '''
+command -v fnm >/dev/null 2>&1 || exit 0
+version=$(cat tools/node-version)
+fnm install "$version"
+fnm list | grep -q default || fnm default "$version"
+'''
+
+# Built-in plugins. Uncomment one and replace the example values to enable it.
+# Store each secret on every machine with `ec secret set NAME`.
+
+# Point Claude Code, Codex, and Grok at a CLIProxyAPI server.
+# [plugins.cliproxyapi]
+# url = "https://proxy.example.test:8317"
+# key = { secret = "cliproxyapi" }
+
+# Share one Executor MCP server with Claude Code, Codex, and Grok.
+# [plugins.executor]
+# url = "https://mcp.example.test:4312"
+# key = { secret = "executor" }
+
+# Wake a machine with Wake-on-LAN, then unlock its wallet.
+# [plugins.wol]
+# mac = "00:00:5e:00:53:01"
+# broadcast = "192.0.2.255"
+# host = "desktop.example.test"
+# relay = "user@relay.example.test"
+# after_wake = "kde unlock --wait"
+
+# Unlock KWallet and shut down a KDE Plasma machine over SSH.
+# [plugins.kde]
+# host = "user@desktop.example.test"
+
+# Stop stale dev servers and containers before a benchmark: ec quiet.
+# [plugins.quiet]
