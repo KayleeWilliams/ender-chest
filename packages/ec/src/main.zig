@@ -23,6 +23,7 @@ pub fn main(init: std.process.Init) void {
         if (c.json) c.result(label(&c, o), false, message) catch {} else c.log("{s}", .{message}) catch {};
         std.process.exit(if (core.eql(u8, c.error_code, "usage_error")) 2 else 1);
     };
+    if (!o.show_help) @import("update.zig").notice(&c, o.command);
 }
 fn label(c: *core.Context, o: options.Options) []const u8 {
     return switch (o.command) {
@@ -43,6 +44,7 @@ fn execute(c: *core.Context, o: options.Options) !void {
     switch (o.command) {
         .fleet => if (!try @import("fleet.zig").run(c, o)) std.process.exit(1),
         .secret => try @import("secrets.zig").run(c, o.action, o.target),
+        .update => try @import("update.zig").run(c, o.check),
         .plugin => {
             try @import("sync.zig").resolveRepo(c, o);
             const m = try manifest.load(c);

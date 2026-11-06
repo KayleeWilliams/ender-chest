@@ -332,9 +332,7 @@ fn addPath(c: *C, args: *std.ArrayList([]const u8), path: []const u8) !void {
 
 fn refreshBinary(c: *C, o: O) !void {
     if (!c.exists(try c.path(&.{ c.repo, "build.zig" }))) {
-        const release = @import("update.zig").latest(c) orelse return;
-        try @import("update.zig").tryRelease(c, o, release.hash);
-        return;
+        return @import("update.zig").syncLatest(c, o);
     }
     const hash = try @import("source_hash.zig").fingerprint(c.a, c.io, c.repo);
     try @import("update.zig").tryRelease(c, o, &hash);
