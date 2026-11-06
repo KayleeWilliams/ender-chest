@@ -1,3 +1,5 @@
+![Ender Chest inventory holding the logos of Codex, Claude, Meta Muse, Grok, Gemini, Cursor, OpenCode, Amp, Tembo, T3 Code, Orca, skills.sh, MCP, Executor, CLIProxyAPI, Tailscale, GitHub, Git, Homebrew, Zed, macOS, and Linux](docs/assets/ender-chest.png)
+
 # Ender Chest
 
 `ec` keeps development machines in sync. It applies a Git-backed config checkout, installs shared agent skills, and checks or updates machines over Tailscale and SSH.
@@ -8,18 +10,10 @@ The CLI is native Zig for macOS and Linux. Installed binaries need neither Node 
 
 The recommended installer downloads a native binary for macOS 13+ or Linux, on ARM64 or x86-64. It verifies the release's SHA-256 checksum and installs `ec` in `~/.local/bin`. It needs no compiler, Node, or sudo.
 
-The repository is currently private. With [GitHub CLI](https://cli.github.com/) authenticated to an account that has access, run:
-
-```sh
-gh release download --repo KayleeWilliams/ender-chest --pattern install.sh --output - | sh
-export PATH="$HOME/.local/bin:$PATH"
-ec --help
-```
-
-Once the repository is public, users can install with curl:
-
 ```sh
 curl -fsSL https://github.com/KayleeWilliams/ender-chest/releases/latest/download/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+ec --help
 ```
 
 Add the PATH line to your shell profile if needed. The installer leaves shell profiles and machine config untouched. It uses `sha256sum` or `shasum` for verification. A failed download or checksum leaves the existing binary in place.
@@ -27,7 +21,7 @@ Add the PATH line to your shell profile if needed. The installer leaves shell pr
 Pass `--version 0.0.1` to pin a release or `--install-dir /your/bin` to choose a destination. Append these options to `sh -s --`:
 
 ```sh
-gh release download --repo KayleeWilliams/ender-chest --pattern install.sh --output - \
+curl -fsSL https://github.com/KayleeWilliams/ender-chest/releases/latest/download/install.sh \
   | sh -s -- --version 0.0.1 --install-dir "$HOME/.local/bin"
 ```
 
@@ -38,8 +32,7 @@ gh release download --repo KayleeWilliams/ender-chest --pattern install.sh --out
 Each [release](https://github.com/KayleeWilliams/ender-chest/releases) also includes an npm tarball with all four native binaries. It requires Node 20+ and runs without install scripts or additional downloads:
 
 ```sh
-gh release download v0.0.1 --repo KayleeWilliams/ender-chest --pattern ender-chest-0.0.1.tgz
-npm install --global ./ender-chest-0.0.1.tgz
+npm install --global https://github.com/KayleeWilliams/ender-chest/releases/download/v0.0.1/ender-chest-0.0.1.tgz
 ec --help
 ```
 
@@ -144,7 +137,7 @@ Secrets stay on the machine. Sync writes the ones that plugins contribute into a
 
 ## Updates
 
-CLI releases come from `KayleeWilliams/ender-chest`, independently of your config remote. `EC_RELEASE_REPO=owner/repo` selects a fork's releases. While releases are private, downloads need `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login` on each device. These credentials stay local.
+CLI releases come from `KayleeWilliams/ender-chest`, independently of your config remote. `EC_RELEASE_REPO=owner/repo` selects a fork's releases. If a fork's releases are private, each device needs `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login`. These credentials stay local.
 
 Run `ec update` to install the latest release. It downloads the binary for your machine, checks its sha256 against the release manifest, runs it once, and then replaces the `ec` you ran. A failed step leaves the old binary in place. `ec update --check` reports the latest release without installing it, and `--json` returns the versions and release notes link.
 
