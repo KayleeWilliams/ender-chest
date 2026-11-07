@@ -837,7 +837,7 @@ describe("native ec", () => {
       false
     );
   });
-  it("prefers the copy of a skill in a directory named after it", () => {
+  it("prefers the shallowest copy of a skill in a directory named after it", () => {
     const f = fixture();
     // The source ships skills/tool and a package copy at packages/cli, both named "tool".
     const clone = (dirs: string[]) =>
@@ -861,6 +861,25 @@ describe("native ec", () => {
     expect(
       readFileSync(path.join(f.home, ".agents/skills/tool/SKILL.md"), "utf-8")
     ).toContain("# skills/tool");
+
+    // A harness copy deeper in the tree loses to the shallower one.
+    const h = fixture();
+    write(
+      h.repo,
+      "skills/manifest.json",
+      JSON.stringify({
+        skills: [{ name: "tool", skill: "tool", source: "owner/repo" }],
+        version: 1,
+      })
+    );
+    const nested = h.run(
+      ["sync", "--skip-packages"],
+      clone(["harness/claude-code/skills/tool", "pack/skills/tool"])
+    );
+    expect(nested.status, nested.stdout + nested.stderr).toBe(0);
+    expect(
+      readFileSync(path.join(h.home, ".agents/skills/tool/SKILL.md"), "utf-8")
+    ).toContain("# pack/skills/tool");
 
     const g = fixture();
     write(

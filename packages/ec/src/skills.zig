@@ -134,18 +134,26 @@ pub fn parseSource(source: []const u8) !struct { repo: []const u8, ref: ?[]const
     return .{ .repo = repo, .ref = ref };
 }
 // Finds the directory of skill `n` in a source checkout. A repository can hold the same skill
-// twice, such as skills/NAME and a package that ships a copy; the one in a directory named NAME wins.
+// more than once, such as skills/NAME and a package or harness copy. Among matches in a directory
+// named NAME, the one nearest the root wins; a tie is an error.
 fn find(c: *C, root: []const u8, n: []const u8) !?[]const u8 {
     var matches: std.ArrayList([]const u8) = .empty;
     try collect(c, root, n, 0, &matches);
     if (matches.items.len <= 1) return if (matches.items.len == 1) matches.items[0] else null;
-    var named: ?[]const u8 = null;
+    var best: ?[]const u8 = null;
+    var tied = false;
     for (matches.items) |m| {
         if (!eq(u8, std.fs.path.basename(m), n)) continue;
-        if (named != null) return c.fail("Multiple skills named {s} in source. Resolve the duplicate before installing.", .{n});
-        named = m;
+        if (best == null or pathDepth(m) < pathDepth(best.?)) {
+            best = m;
+            tied = false;
+        } else if (pathDepth(m) == pathDepth(best.?)) tied = true;
     }
-    return named orelse c.fail("Multiple skills named {s} in source. Resolve the duplicate before installing.", .{n});
+    if (best == null or tied) return c.fail("Multiple skills named {s} in source. Resolve the duplicate before installing.", .{n});
+    return best;
+}
+fn pathDepth(p: []const u8) usize {
+    return std.mem.count(u8, p, std.fs.path.sep_str);
 }
 fn collect(c: *C, root: []const u8, n: []const u8, depth: usize, matches: *std.ArrayList([]const u8)) anyerror!void {
     if (depth > 12) return;
