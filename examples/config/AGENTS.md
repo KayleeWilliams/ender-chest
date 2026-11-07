@@ -16,4 +16,6 @@ EC_NO_UPDATE=1 HOME="$test_home" ec verify --repo "$PWD"
 
 Inspect the generated agent instructions, settings, and skill links in that temporary directory. The example has no external skill sources; if you add any, review the manifest before running this check because sync can download them. Delete the temporary directory after inspection.
 
+Update `DEVICES.md` when the user adds, renames, or retires a machine. It holds hostnames and account names, never credentials.
+
 Treat `ec push --dry-run` as a write to this checkout. Review its diff before committing, and preserve unrelated edits. Test plugin commands that reach other machines, such as `wol`, `kde`, and proxy restarts, only against devices the user asked to use.

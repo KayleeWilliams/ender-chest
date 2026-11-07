@@ -34,6 +34,10 @@ A request to create or update a PR includes the task-related staging, commit, an
 
 Describe the problem, resulting behavior, and validation in the PR. Keep unrelated cleanup in a separate change.
 
+## Machines
+
+`DEVICES.md` in the user's config checkout lists their machines, how to reach each one, and what each is for. `~/.config/ender-chest/repo` holds that checkout's path. Read it before working on another machine. Run `ec status` to see each machine's ec version, and `ec sync --all` to update the ones that are behind. Act on another machine only when the user asked for that machine.
+
 ## Credentials and local settings
 
 Keep credentials, account sessions, private keys, generated tokens, and machine-specific settings out of Git. Use the project's documented local secret storage. Show variable names and redacted examples when discussing configuration; do not print live tokens in logs or diffs.
