@@ -837,6 +837,66 @@ describe("native ec", () => {
       false
     );
   });
+  it("prefers the shallowest copy of a skill in a directory named after it", () => {
+    const f = fixture();
+    // The source ships skills/tool and a package copy at packages/cli, both named "tool".
+    const clone = (dirs: string[]) =>
+      f.fake(
+        "git",
+        `const fs=require('node:fs'),p=require('node:path'),a=process.argv.slice(2); if(a[0]==='clone'){for(const d of ${JSON.stringify(dirs)}){const dest=p.join(a.at(-1),d);fs.mkdirSync(dest,{recursive:true});fs.writeFileSync(p.join(dest,'SKILL.md'),'---\\nname: tool\\n---\\n# '+d);}}`
+      );
+    write(
+      f.repo,
+      "skills/manifest.json",
+      JSON.stringify({
+        skills: [{ name: "tool", skill: "tool", source: "owner/repo" }],
+        version: 1,
+      })
+    );
+    const r = f.run(
+      ["sync", "--skip-packages"],
+      clone(["packages/cli", "skills/tool"])
+    );
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(
+      readFileSync(path.join(f.home, ".agents/skills/tool/SKILL.md"), "utf-8")
+    ).toContain("# skills/tool");
+
+    // A harness copy deeper in the tree loses to the shallower one.
+    const h = fixture();
+    write(
+      h.repo,
+      "skills/manifest.json",
+      JSON.stringify({
+        skills: [{ name: "tool", skill: "tool", source: "owner/repo" }],
+        version: 1,
+      })
+    );
+    const nested = h.run(
+      ["sync", "--skip-packages"],
+      clone(["harness/claude-code/skills/tool", "pack/skills/tool"])
+    );
+    expect(nested.status, nested.stdout + nested.stderr).toBe(0);
+    expect(
+      readFileSync(path.join(h.home, ".agents/skills/tool/SKILL.md"), "utf-8")
+    ).toContain("# pack/skills/tool");
+
+    const g = fixture();
+    write(
+      g.repo,
+      "skills/manifest.json",
+      JSON.stringify({
+        skills: [{ name: "tool", skill: "tool", source: "owner/repo" }],
+        version: 1,
+      })
+    );
+    const ambiguous = g.run(
+      ["sync", "--skip-packages"],
+      clone(["a/tool", "b/tool"])
+    );
+    expect(ambiguous.status).toBe(1);
+    expect(ambiguous.stderr).toContain("Multiple skills named tool");
+  });
   it("rejects traversal in skill removals before deleting anything", () => {
     const f = fixture();
     const keep = write(f.home, "keep", "safe");
