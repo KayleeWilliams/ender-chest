@@ -117,6 +117,18 @@ const gitAt = (cwd: string, ...args: string[]) => {
   return r;
 };
 
+interface HookGroup {
+  hooks: { command: string; timeout?: number; type: string }[];
+  matcher?: string;
+}
+interface ClaudeSettings {
+  hooks?: Record<string, HookGroup[]>;
+  model: string;
+}
+const repoHook = (timeout: number): HookGroup => ({
+  hooks: [{ command: "repo-stop-hook", timeout, type: "command" }],
+});
+
 describe("native ec", () => {
   it("prints discoverable help without a runtime, HOME, repo, or config", () => {
     const r = spawnSync(executable, [], {
@@ -357,6 +369,51 @@ describe("native ec", () => {
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).ok).toBe(true);
     expect(r.stderr).not.toContain("git pull failed");
+  });
+  it("merges the config's Claude hooks with hooks other tools installed", () => {
+    const f = fixture();
+    const other = {
+      hooks: [{ command: "other-tool-hook", type: "command" }],
+      matcher: "*",
+    };
+    const hooks = () =>
+      JSON.parse(
+        readFileSync(path.join(f.home, ".claude/settings.json"), "utf-8")
+      ).hooks;
+    const repoSettings = (h?: Record<string, HookGroup[]>) => {
+      const settings: ClaudeSettings = { model: "m" };
+      if (h) {
+        settings.hooks = h;
+      }
+      write(f.repo, "agents/claude/settings.json", JSON.stringify(settings));
+    };
+    write(
+      f.home,
+      ".claude/settings.json",
+      JSON.stringify({
+        hooks: { PostCompact: [other], Stop: [other, repoHook(60)] },
+      })
+    );
+    repoSettings({ Stop: [repoHook(60)] });
+    f.apply();
+    expect(hooks()).toEqual({
+      PostCompact: [other],
+      Stop: [other, repoHook(60)],
+    });
+
+    // A changed repo hook replaces the copy the last sync added.
+    repoSettings({ Stop: [repoHook(90)], SubagentStop: [repoHook(90)] });
+    f.apply();
+    expect(hooks()).toEqual({
+      PostCompact: [other],
+      Stop: [other, repoHook(90)],
+      SubagentStop: [repoHook(90)],
+    });
+
+    // Removing the repo's hooks removes what sync added and keeps the rest.
+    repoSettings();
+    f.apply();
+    expect(hooks()).toEqual({ PostCompact: [other], Stop: [other] });
   });
   it("sync is idempotent and preserves local settings, trust, hooks, and credentials", () => {
     const f = fixture();

@@ -46,7 +46,7 @@ This directory's [AGENTS.md](AGENTS.md) gives an agent instructions for editing 
 
 | Source | Installed path | Sync behavior |
 | --- | --- | --- |
-| [Claude settings](agents/claude/settings.json) | `~/.claude/settings.json` | Merges portable settings on every sync. Matching top-level keys are replaced; `env` merges by key. |
+| [Claude settings](agents/claude/settings.json) | `~/.claude/settings.json` | Merges portable settings on every sync. Matching top-level keys are replaced; `env` merges by key, and `hooks` groups join the ones already there. |
 | [Codex config](agents/codex/config.toml) | `~/.codex/config.toml` | Seeds a missing file, then preserves existing preferences. |
 | [Grok config](agents/grok/config.toml) | `~/.grok/config.toml` | Seeds a missing file, then preserves existing preferences. |
 

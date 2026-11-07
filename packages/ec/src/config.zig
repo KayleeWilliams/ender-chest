@@ -149,7 +149,7 @@ pub fn serialize(a: std.mem.Allocator, t: *const toml.Table) ![]const u8 {
 }
 const plugin = @import("plugin.zig");
 // What ec added on the last sync, so it can remove entries a disabled plugin left behind.
-pub const Managed = struct { mcp_servers: []const []const u8 = &.{}, provider: ?[]const u8 = null, models: []const []const u8 = &.{} };
+pub const Managed = struct { mcp_servers: []const []const u8 = &.{}, provider: ?[]const u8 = null, models: []const []const u8 = &.{}, claude_hooks: []const []const u8 = &.{} };
 const header_keys = [_][]const u8{ "bearer_token_env_var", "bearer_token_file", "env_http_headers", "http_headers", "headers" };
 const model_auth_keys = [_][]const u8{ "api_base_url", "env_key", "auth_provider", "model_provider", "extra_headers", "env_http_headers", "query_params", "mtls_cert_dir", "base_url", "api_key", "api_backend" };
 pub fn configure(a: std.mem.Allocator, current: []const u8, agent: enum { codex, grok }, contrib: plugin.Contributions, previous: Managed) ![]const u8 {
@@ -242,10 +242,18 @@ pub fn loadManaged(c: *C) !Managed {
     var models: std.ArrayList([]const u8) = .empty;
     for (core.array(v, "models")) |item| if (item == .string) try models.append(c.a, item.string);
     m.models = models.items;
+    var hooks: std.ArrayList([]const u8) = .empty;
+    for (core.array(v, "claude_hooks")) |item| if (item == .string) try hooks.append(c.a, item.string);
+    m.claude_hooks = hooks.items;
     return m;
 }
-fn saveManaged(c: *C, contrib: plugin.Contributions) !void {
+fn saveManaged(c: *C, contrib: plugin.Contributions, claude_hooks: []const []const u8) !void {
     var v = c.object();
+    if (claude_hooks.len > 0) {
+        var hooks = std.json.Array.init(c.a);
+        for (claude_hooks) |h| try hooks.append(.{ .string = h });
+        try v.object.put(c.a, "claude_hooks", .{ .array = hooks });
+    }
     var names = std.json.Array.init(c.a);
     for (contrib.mcp_servers) |m| try names.append(.{ .string = m.name });
     try v.object.put(c.a, "mcp_servers", .{ .array = names });
@@ -258,6 +266,48 @@ fn saveManaged(c: *C, contrib: plugin.Contributions) !void {
     try c.writeJson(try statePath(c), v, 0o600);
 }
 
+// Portable hook groups join the ones already in ~/.claude/settings.json, such as hooks other
+// tools install. Groups this config added on an earlier sync are replaced, so editing or
+// removing one in the repo carries over instead of leaving a stale copy.
+fn mergeHooks(c: *C, local: ?std.json.Value, portable: std.json.Value, previous: []const []const u8) !struct { hooks: std.json.Value, applied: []const []const u8 } {
+    if (portable != .object) return error.ExpectedObject;
+    var applied: std.ArrayList([]const u8) = .empty;
+    var pit = portable.object.iterator();
+    while (pit.next()) |entry| {
+        if (entry.value_ptr.* != .array) return error.ExpectedArray;
+        for (entry.value_ptr.array.items) |group| try applied.append(c.a, try std.json.Stringify.valueAlloc(c.a, group, .{}));
+    }
+    var hooks = local orelse c.object();
+    if (hooks != .object) return error.ExpectedObject;
+    // Events whose only groups came from this config are dropped unless the config still adds one.
+    var emptied: std.ArrayList([]const u8) = .empty;
+    var lit = hooks.object.iterator();
+    while (lit.next()) |entry| {
+        if (entry.value_ptr.* != .array) continue;
+        var kept = std.json.Array.init(c.a);
+        for (entry.value_ptr.array.items) |group| {
+            const text = try std.json.Stringify.valueAlloc(c.a, group, .{});
+            if (!contains(previous, text) and !contains(applied.items, text)) try kept.append(group);
+        }
+        if (kept.items.len == 0 and entry.value_ptr.array.items.len > 0) try emptied.append(c.a, entry.key_ptr.*);
+        entry.value_ptr.* = .{ .array = kept };
+    }
+    pit = portable.object.iterator();
+    while (pit.next()) |entry| {
+        var groups = if (hooks.object.get(entry.key_ptr.*)) |v| if (v == .array) v.array else std.json.Array.init(c.a) else std.json.Array.init(c.a);
+        try groups.appendSlice(entry.value_ptr.array.items);
+        try hooks.object.put(c.a, entry.key_ptr.*, .{ .array = groups });
+    }
+    for (emptied.items) |k| if (hooks.object.get(k).?.array.items.len == 0) {
+        _ = hooks.object.orderedRemove(k);
+    };
+    return .{ .hooks = hooks, .applied = applied.items };
+}
+fn contains(list: []const []const u8, text: []const u8) bool {
+    for (list) |item| if (std.mem.eql(u8, item, text)) return true;
+    return false;
+}
+
 pub fn apply(c: *C, contrib: plugin.Contributions) !void {
     const previous = try loadManaged(c);
     const instructions = try c.read(try c.path(&.{ c.repo, "agents/shared/AGENTS.md" }));
@@ -268,13 +318,21 @@ pub fn apply(c: *C, contrib: plugin.Contributions) !void {
     var env = settings.object.get("env") orelse c.object();
     if (env != .object) return error.ExpectedObject;
     const portable = try c.readJson(try c.path(&.{ c.repo, "agents/claude/settings.json" }));
+    var applied_hooks: []const []const u8 = &.{};
     var it = portable.object.iterator();
     while (it.next()) |entry| {
-        if (core.eql(u8, entry.key_ptr.*, "env")) {
+        if (core.eql(u8, entry.key_ptr.*, "hooks")) {
+            const merged = try mergeHooks(c, settings.object.get("hooks"), entry.value_ptr.*, previous.claude_hooks);
+            try settings.object.put(c.a, "hooks", merged.hooks);
+            applied_hooks = merged.applied;
+        } else if (core.eql(u8, entry.key_ptr.*, "env")) {
             if (entry.value_ptr.* != .object) return error.ExpectedObject;
             var eit = entry.value_ptr.object.iterator();
             while (eit.next()) |e| try env.object.put(c.a, e.key_ptr.*, e.value_ptr.*);
         } else try settings.object.put(c.a, entry.key_ptr.*, entry.value_ptr.*);
+    }
+    if (portable.object.get("hooks") == null and previous.claude_hooks.len > 0) {
+        if (settings.object.get("hooks")) |local| try settings.object.put(c.a, "hooks", (try mergeHooks(c, local, c.object(), previous.claude_hooks)).hooks);
     }
     if (contrib.provider) |pr| {
         try env.object.put(c.a, "ANTHROPIC_BASE_URL", .{ .string = pr.base_url });
@@ -325,7 +383,7 @@ pub fn apply(c: *C, contrib: plugin.Contributions) !void {
         const next = configure(c.a, current, if (comptime core.eql(u8, agent, "codex")) .codex else .grok, contrib, previous) catch return c.fail("Cannot merge {s}. Check its TOML syntax and table types; the file was left intact.", .{file});
         try c.write(file, next, 0o600);
     }
-    try saveManaged(c, contrib);
+    try saveManaged(c, contrib, applied_hooks);
 }
 fn clobberStack() void {
     var junk: [64 * 1024]u8 = undefined;
