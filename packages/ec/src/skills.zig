@@ -114,7 +114,7 @@ pub fn apply(c: *C, profile: []const u8, update: bool) !void {
             try sources.put(source, dest);
             break :blk dest;
         };
-        const found = try find(c, checkout, core.string(item, "skill").?, 0) orelse return c.fail("Skill {s} was not found in {s}.", .{ n, source });
+        const found = try find(c, checkout, core.string(item, "skill").?) orelse return c.fail("Skill {s} was not found in {s}.", .{ n, source });
         try replace(c, found, try canonical(c, n));
         try link(c, n);
     }
@@ -133,32 +133,39 @@ pub fn parseSource(source: []const u8) !struct { repo: []const u8, ref: ?[]const
     }
     return .{ .repo = repo, .ref = ref };
 }
-fn find(c: *C, root: []const u8, n: []const u8, depth: usize) anyerror!?[]const u8 {
-    if (depth > 12) return null;
+// Finds the directory of skill `n` in a source checkout. A repository can hold the same skill
+// twice, such as skills/NAME and a package that ships a copy; the one in a directory named NAME wins.
+fn find(c: *C, root: []const u8, n: []const u8) !?[]const u8 {
+    var matches: std.ArrayList([]const u8) = .empty;
+    try collect(c, root, n, 0, &matches);
+    if (matches.items.len <= 1) return if (matches.items.len == 1) matches.items[0] else null;
+    var named: ?[]const u8 = null;
+    for (matches.items) |m| {
+        if (!eq(u8, std.fs.path.basename(m), n)) continue;
+        if (named != null) return c.fail("Multiple skills named {s} in source. Resolve the duplicate before installing.", .{n});
+        named = m;
+    }
+    return named orelse c.fail("Multiple skills named {s} in source. Resolve the duplicate before installing.", .{n});
+}
+fn collect(c: *C, root: []const u8, n: []const u8, depth: usize, matches: *std.ArrayList([]const u8)) anyerror!void {
+    if (depth > 12) return;
     if (try c.optional(try c.path(&.{ root, "SKILL.md" }))) |body| {
         var lines = std.mem.splitScalar(u8, body, '\n');
+        var named = false;
         if (eq(u8, core.trim(lines.next() orelse ""), "---")) while (lines.next()) |line| {
             const t = core.trim(line);
             if (eq(u8, t, "---")) break;
-            if (std.mem.startsWith(u8, t, "name:")) {
-                const value = std.mem.trim(u8, core.trim(t[5..]), "\"'");
-                if (eq(u8, value, n)) return root;
-            }
+            if (std.mem.startsWith(u8, t, "name:")) named = eq(u8, std.mem.trim(u8, core.trim(t[5..]), "\"'"), n);
         };
-        if (eq(u8, std.fs.path.basename(root), n)) return root;
+        if (named or eq(u8, std.fs.path.basename(root), n)) return matches.append(c.a, root);
     }
     var dir = try core.cwd().openDir(c.io, root, .{ .iterate = true });
     defer dir.close(c.io);
     var it = dir.iterate();
-    var found: ?[]const u8 = null;
     while (try it.next(c.io)) |entry| {
         if (entry.kind != .directory or eq(u8, entry.name, ".git") or eq(u8, entry.name, "node_modules")) continue;
-        if (try find(c, try c.path(&.{ root, entry.name }), n, depth + 1)) |p| {
-            if (found != null) return c.fail("Multiple skills named {s} in source. Resolve the duplicate before installing.", .{n});
-            found = p;
-        }
+        try collect(c, try c.path(&.{ root, entry.name }), n, depth + 1, matches);
     }
-    return found;
 }
 pub fn harvest(c: *C) !void {
     var manifest = try load(c);
