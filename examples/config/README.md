@@ -113,6 +113,10 @@ Sync creates a missing `once` file, including an empty `~/.zprofile.local`, and 
 
 Review [tools/Brewfile](tools/Brewfile) before running sync without `--skip-packages`. The `mac` profile also installs [tools/Brewfile.mac](tools/Brewfile.mac). The setup steps install Oh My Zsh and three zsh-users plugins, then the Node version in [tools/node-version](tools/node-version) through fnm when fnm is installed. A step whose `creates` path exists is skipped.
 
+## Devices
+
+[DEVICES.md](DEVICES.md) lists your machines, their Tailscale names, SSH users, and roles. Replace the example rows with your own. The shared agent instructions tell agents to read it before they work on another machine. It also covers first-time SSH access and GitHub credentials for syncs that run over SSH. Keep the repository private once this file lists real hostnames.
+
 ## Save changes
 
 Edit shared instructions, agent templates, and skills in this checkout. Use `ec push --dry-run` to collect changes to listed home files and skills without committing. This still modifies the checkout, so review `git diff` afterwards. `ec push` commits and uploads changes when a remote is configured. Other machines pick them up when you run `ec sync` there.
