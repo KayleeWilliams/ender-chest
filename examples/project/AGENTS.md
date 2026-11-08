@@ -2,7 +2,7 @@
 
 ## Workspace
 
-This example assumes a pnpm workspace with an application in `apps/web` and shared code in `packages/`. Adapt these paths and the commands below to this repository before using the file.
+This example assumes a pnpm workspace with an application in `apps/web` and shared code in `packages/`. Copy it into a codebase, with `CLAUDE.md` for Claude Code, and adapt these paths and the commands below to that repository. `ec sync` does not install project instructions; preferences for every project belong in your config's `agents/shared/AGENTS.md`.
 
 Use the pnpm version pinned by `packageManager` and the Node version in `.node-version`. Keep the root lockfile as the dependency source of truth. Install with `pnpm install --frozen-lockfile` when checking an existing change.
 

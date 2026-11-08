@@ -1,6 +1,5 @@
 name = "kde"
 description = "Unlock KWallet and shut down a KDE Plasma machine over SSH."
-run = "ec:kde"
 
 [settings.host]
 required = true

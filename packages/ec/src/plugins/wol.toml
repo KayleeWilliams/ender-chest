@@ -1,6 +1,5 @@
 name = "wol"
 description = "Wake a machine with Wake-on-LAN and wait until it answers."
-run = "ec:wol"
 
 [settings.mac]
 required = true

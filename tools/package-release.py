@@ -12,25 +12,21 @@ import shutil
 import tarfile
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGETS = {
-    "ec-aarch64-macos": ("aarch64-macos", bytes.fromhex("cffaedfe0c000001")),
-    "ec-x86_64-macos": ("x86_64-macos", bytes.fromhex("cffaedfe07000001")),
-    "ec-aarch64-linux": ("aarch64-linux", 183),
-    "ec-x86_64-linux": ("x86_64-linux", 62),
-}
+# Each release target's binary is the asset ec-KEY.
+TARGETS = json.loads((ROOT / "packages/ec/src/targets.json").read_text())
 
 
 def checksum(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def native_matches(data, expected):
-    if isinstance(expected, bytes):
-        return data.startswith(expected)
+def native_matches(data, target):
+    if "magic" in target:
+        return data.startswith(bytes.fromhex(target["magic"]))
     return (
         len(data) >= 20
         and data[:6] == b"\x7fELF\x02\x01"
-        and int.from_bytes(data[18:20], "little") == expected
+        and int.from_bytes(data[18:20], "little") == target["elf_machine"]
     )
 
 
@@ -53,7 +49,9 @@ def main():
 
     binaries = {}
     assets = {}
-    for name, (key, native) in TARGETS.items():
+    for target in TARGETS:
+        key = target["key"]
+        name = f"ec-{key}"
         matches = [p for p in args.artifacts.rglob(name) if p.is_file()]
         if len(matches) != 1:
             parser.error(f"expected one {name}, found {len(matches)}")
@@ -65,7 +63,7 @@ def main():
             parser.error(f"checksum mismatch for {name}")
         if binary.with_name("source_hash.txt").read_text().strip() != args.source_hash:
             parser.error(f"source hash mismatch for {name}")
-        if not native_matches(data, native):
+        if not native_matches(data, target):
             parser.error(f"wrong native target for {name}")
         binaries[name] = data
         assets[key] = {"name": name, "sha256": digest}
@@ -120,7 +118,7 @@ def main():
         "assets": assets,
     }
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"Prepared ec {args.version}: four native binaries, curl installer, and {tarball.name}")
+    print(f"Prepared ec {args.version}: {len(binaries)} native binaries, curl installer, and {tarball.name}")
 
 
 if __name__ == "__main__":

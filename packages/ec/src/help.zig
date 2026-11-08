@@ -1,17 +1,12 @@
+// Help text and JSON command definitions for ec's commands and for plugin commands.
 const std = @import("std");
 const core = @import("core.zig");
-const Options = @import("options.zig").Options;
-const plugin = @import("plugin.zig");
+const cli = @import("options.zig");
+const build_info = @import("build_info.zig");
+const spec = @import("plugin_manifest.zig");
+const Option = spec.Option;
 
-pub const Option = struct {
-    name: []const u8,
-    type: enum { boolean, string } = .boolean,
-    description: []const u8,
-    values: []const []const u8 = &.{},
-    default: ?[]const u8 = null,
-    required: bool = false,
-};
-pub const Definition = struct {
+const Definition = struct {
     command: []const u8,
     action: []const u8 = "",
     // Set for plugin commands: "built-in", a config repo path, or owner/repo#ref.
@@ -19,215 +14,122 @@ pub const Definition = struct {
     usage: []const u8,
     description: []const u8,
     options: []const Option,
+    // Plugin settings the command cannot run without.
+    needs: []const []const u8 = &.{},
     effects: []const []const u8,
     examples: []const []const u8,
 };
-const common = [_]Option{
-    .{ .name = "json", .description = "One JSON result on stdout; diagnostics on stderr." },
-    .{ .name = "help", .description = "Show help for this command. Alias: -h." },
+const common = blk: {
+    var list: [cli.common.len]Option = undefined;
+    for (cli.common, 0..) |f, i| list[i] = cli.flags.get(f).option;
+    break :blk list;
 };
-const config = [_]Option{
-    .{ .name = "repo", .type = .string, .description = "Config checkout path.", .default = "EC_REPO, current or saved checkout; linked worktrees use the primary checkout" },
-    .{ .name = "profile", .type = .string, .description = "Override the detected machine profile. ender-chest.toml filters files and steps by profile name.", .default = "mac on macOS, cloud in CI, containers, and Linux" },
-};
-const definitions = [_]Definition{
-    .{
-        .command = "sync",
-        .usage = "ec sync [options]",
-        .description = "Pull the config repo and apply it to this machine.",
-        .options = &(config ++ [_]Option{
-            .{ .name = "skip-packages", .description = "Skip package installs and shell setup." },
-            .{ .name = "update-skills", .description = "Refresh third-party skills from their Git repositories." },
-            .{ .name = "all", .description = "Sync every machine in the tailnet that is behind. Takes no other options except --json." },
-        } ++ common),
-        .effects = &.{ "Applies the files, packages, setup steps, and plugins listed in ender-chest.toml, installs ec, and updates skill links. Preserves local credentials and settings.", "Pulls a clean checkout, using the primary worktree from a linked checkout. A dirty checkout or failed pull uses local files.", "Installs a newer ec release first, then resumes with it. In a checkout with ec's sources, installs the release built from those sources or rebuilds with Zig. Development builds are never replaced by a release. EC_NO_UPDATE=1 skips the release check.", "Installs packages unless --skip-packages is set.", "With --all, syncs this machine and every other reachable machine that is behind, one at a time over SSH, with ec sync --skip-packages. Skips machines that are current, offline, or unreachable. Any failed sync returns exit code 1." },
-        .examples = &.{ "ec sync", "ec sync --skip-packages", "ec sync --all", "ec sync --repo ~/dev/ender-chest --profile cloud --json" },
-    },
-    .{
-        .command = "push",
-        .usage = "ec push [options]",
-        .description = "Capture managed files, commit, and push.",
-        .options = &(config ++ [_]Option{.{ .name = "dry-run", .description = "Capture files into the checkout without staging, committing, or pushing." }} ++ common),
-        .effects = &.{ "Writes captured files into the checkout, including with --dry-run.", "Commits and uploads managed changes unless --dry-run is set. Refuses unrelated staged files.", "Other machines update when you run ec sync there." },
-        .examples = &.{ "ec push --dry-run", "ec push --json" },
-    },
-    .{
-        .command = "verify",
-        .usage = "ec verify [options]",
-        .description = "Check installed files and skill links without changing them.",
-        .options = &(config ++ common),
-        .effects = &.{"Reads local files only. Missing files or broken links return exit code 1."},
-        .examples = &.{ "ec verify", "ec verify --json" },
-    },
-    .{
-        .command = "status",
-        .usage = "ec status [options]",
-        .description = "Show each machine's ec version and config commit.",
-        .options = &common,
-        .effects = &.{ "Lists your macOS and Linux machines from tailscale status, then reads ec --version over SSH.", "Compares each machine with the latest GitHub release and the config repo's main branch. Makes no changes.", "Machines need SSH access: Remote Login on Macs, SSH or Tailscale SSH on Linux." },
-        .examples = &.{ "ec status", "ec status --json" },
-    },
-    .{
-        .command = "plugin",
-        .action = "list",
-        .usage = "ec plugin list [options]",
-        .description = "Show enabled plugins, their sources, and their commands.",
-        .options = &([_]Option{config[0]} ++ common),
-        .effects = &.{ "Reads ender-chest.toml and installed plugins. Makes no changes.", "Notes settings and secrets that a plugin still needs." },
-        .examples = &.{ "ec plugin list", "ec plugin list --json" },
-    },
-    .{
-        .command = "plugin",
-        .action = "update",
-        .usage = "ec plugin update NAME [options]",
-        .description = "Move a GitHub plugin to the newest commit of its ref.",
-        .options = &([_]Option{config[0]} ++ common),
-        .effects = &.{ "Fetches the plugin, records the commit in ender-chest.lock, and prints a GitHub compare link.", "Review the changes, then commit the lock file. Other machines use the new commit after ec sync." },
-        .examples = &.{ "ec plugin update backup", "ec plugin update backup --json" },
-    },
-    .{
-        .command = "secret",
-        .action = "set",
-        .usage = "ec secret set NAME [options]",
-        .description = "Save a secret on this machine for plugin settings to use.",
-        .options = &common,
-        .effects = &.{ "Reads the value from a hidden prompt, or from stdin when piped. Never from arguments.", "Writes ~/.config/ender-chest/secrets/NAME with mode 0600. Reference it as { secret = \"NAME\" }. Run ec sync afterwards to update agent settings." },
-        .examples = &.{ "ec secret set executor", "printf %s \"$TOKEN\" | ec secret set executor --json" },
-    },
-    .{
-        .command = "secret",
-        .action = "list",
-        .usage = "ec secret list [options]",
-        .description = "List the names of secrets saved on this machine.",
-        .options = &common,
-        .effects = &.{"Prints names only, never values."},
-        .examples = &.{ "ec secret list", "ec secret list --json" },
-    },
-    .{
-        .command = "secret",
-        .action = "remove",
-        .usage = "ec secret remove NAME [options]",
-        .description = "Delete a secret saved on this machine.",
-        .options = &common,
-        .effects = &.{"Deletes ~/.config/ender-chest/secrets/NAME. Settings that use it are skipped on the next sync."},
-        .examples = &.{"ec secret remove executor"},
-    },
-    .{
-        .command = "update",
-        .usage = "ec update [options]",
-        .description = "Install the latest ec release.",
-        .options = &([_]Option{.{ .name = "check", .description = "Report the latest release without installing it." }} ++ common),
-        .effects = &.{ "Replaces the ec you ran after checking the download's sha256 and running it once. A failed step leaves the old binary in place.", "For an npm tarball installation or a project dependency, prints the command to run instead. A development build prints the installer command.", "Interactive commands also say once a day when a newer release exists. EC_NO_UPDATE=1 or NO_UPDATE_NOTIFIER=1 turns that off, as do CI, --json, and output that is not a terminal." },
-        .examples = &.{ "ec update", "ec update --check", "ec update --check --json" },
-    },
-    .{
-        .command = "version",
-        .usage = "ec --version",
-        .description = "Show the CLI version.",
-        .options = &common,
-        .effects = &.{"Reads no config and makes no changes."},
-        .examples = &.{ "ec --version", "ec --version --json" },
-    },
-};
+const exit_codes = "\nExit codes: 0 success, 1 operation failed or unreachable, 2 invalid arguments.\n";
 
-fn append(c: *core.Context, text: *std.ArrayList(u8), comptime format: []const u8, args: anytype) !void {
-    try text.appendSlice(c.a, try c.fmt(format, args));
+fn coreDefinition(c: *core.Context, s: cli.Spec) !Definition {
+    var options: std.ArrayList(Option) = .empty;
+    for (s.flags) |f| try options.append(c.a, cli.flags.get(f).option);
+    try options.appendSlice(c.a, &common);
+    return .{ .command = s.group(), .action = s.action(), .usage = s.usage, .description = s.description, .options = options.items, .effects = s.effects, .examples = s.examples };
 }
-fn optionRows(c: *core.Context, text: *std.ArrayList(u8), entries: []const Option) !void {
-    for (entries) |entry| {
-        const label = try c.fmt("--{s}{s}", .{ entry.name, if (entry.type == .string) " <value>" else "" });
-        try append(c, text, "  {s:<23} {s}\n", .{ label, entry.description });
-        if (entry.values.len > 0) try append(c, text, "                          Values: {s}.\n", .{try std.mem.join(c.a, ", ", entry.values)});
-        if (entry.default) |value| try append(c, text, "                          Default: {s}.\n", .{value});
+fn pluginDefinition(c: *core.Context, p: spec.Plugin, cmd: spec.Command) !Definition {
+    var options: std.ArrayList(Option) = .empty;
+    try options.appendSlice(c.a, cmd.options);
+    if (!cmd.passthrough) try options.appendSlice(c.a, &common);
+    return .{ .command = p.name, .action = cmd.name, .plugin = p.source, .usage = if (cmd.usage.len > 0) cmd.usage else try c.fmt("ec {s} {s} [options]", .{ p.name, cmd.name }), .description = cmd.description, .options = options.items, .needs = cmd.needs, .effects = cmd.effects, .examples = cmd.examples };
+}
+
+const Text = struct {
+    c: *core.Context,
+    buf: std.ArrayList(u8) = .empty,
+    fn add(t: *Text, comptime format: []const u8, args: anytype) !void {
+        try t.buf.appendSlice(t.c.a, try t.c.fmt(format, args));
     }
-}
-fn grouped(o: Options) bool {
-    return o.command == .plugin or o.command == .secret;
-}
-fn detail(c: *core.Context, text: *std.ArrayList(u8), entry: Definition) !void {
-    try append(c, text, "{s}\n\nUsage: {s}\n\nOptions:\n", .{ entry.description, entry.usage });
-    try optionRows(c, text, entry.options);
-    try append(c, text, "\nEffects:\n", .{});
-    for (entry.effects) |effect| try append(c, text, "  {s}\n", .{effect});
-    try append(c, text, "\nExamples:\n", .{});
-    for (entry.examples) |example| try append(c, text, "  {s}\n", .{example});
-}
-pub fn show(c: *core.Context, o: Options, plugins: []const plugin.Plugin) !void {
-    var entries: std.ArrayList(Definition) = .empty;
-    for (definitions) |entry| {
-        if (o.command != .help and !core.eql(u8, entry.command, @tagName(o.command))) continue;
-        if (grouped(o) and o.action.len > 0 and !core.eql(u8, entry.action, o.action)) continue;
-        try entries.append(c.a, entry);
-    }
-    // Explicit actions such as `ec plugin update --help` narrow to one entry; the default action does not.
-    if (grouped(o) and entries.items.len == 1 and !explicit(o)) {
-        entries.clearRetainingCapacity();
-        for (definitions) |entry| if (core.eql(u8, entry.command, @tagName(o.command))) try entries.append(c.a, entry);
-    }
-    var text: std.ArrayList(u8) = .empty;
-    try append(c, &text, "ec {s} - ender chest\n\n", .{@import("main.zig").version});
-    if (entries.items.len == 1) {
-        try detail(c, &text, entries.items[0]);
-    } else {
-        const scope = if (grouped(o)) try c.fmt("ec {s}", .{@tagName(o.command)}) else "ec";
-        try append(c, &text, "Usage: {s} <command> [options]\n\nCommands:\n", .{scope});
-        if (grouped(o)) {
-            for (entries.items) |entry| try append(c, &text, "  {s:<12} {s}\n", .{ entry.action, entry.description });
-        } else {
-            for (entries.items) |entry| {
-                if (entry.action.len > 0 or core.eql(u8, entry.command, "version")) continue;
-                try append(c, &text, "  {s:<12} {s}\n", .{ entry.command, entry.description });
-            }
-            try append(c, &text, "  plugin       List enabled plugins or update one from GitHub.\n", .{});
-            try append(c, &text, "  secret       Save, list, or remove secrets that plugin settings use.\n", .{});
-            if (plugins.len > 0) {
-                try append(c, &text, "\nPlugins:\n", .{});
-                for (plugins) |p| {
-                    try append(c, &text, "  {s:<12} {s}\n", .{ p.name, p.description });
-                    for (p.commands) |cmd| try entries.append(c.a, try definition(c, p, cmd));
-                }
-            }
+    fn options(t: *Text, entries: []const Option) !void {
+        for (entries) |entry| {
+            try t.row(try t.c.fmt("--{s}{s}", .{ entry.name, if (entry.kind == .string) " <value>" else "" }), entry.description);
+            if (entry.values.len > 0) try t.add("                          Values: {s}.\n", .{try std.mem.join(t.c.a, ", ", entry.values)});
+            if (entry.default) |value| try t.add("                          Default: {s}.\n", .{value});
         }
-        try append(c, &text, "\nOptions:\n", .{});
-        try optionRows(c, &text, &common);
-        if (!grouped(o)) try append(c, &text, "  --version               Show the CLI version.\n", .{});
-        try append(c, &text, "\nUse {s} <command> --help for options, effects, and examples.\nAdd --json for structured command definitions.\n", .{scope});
     }
-    try append(c, &text, "\nExit codes: 0 success, 1 operation failed or unreachable, 2 invalid arguments.\n", .{});
-    try c.resultData("help", true, text.items, .{ .command_definitions = entries.items });
+    fn row(t: *Text, name: []const u8, description: []const u8) !void {
+        try t.add("  {s:<23} {s}\n", .{ name, description });
+    }
+    fn detail(t: *Text, d: Definition, p: ?spec.Plugin) !void {
+        try t.add("{s}\n\nUsage: {s}\n\nOptions:\n", .{ d.description, d.usage });
+        try t.options(d.options);
+        if (d.needs.len > 0) {
+            try t.add("\nNeeds, under [plugins.{s}] in ender-chest.toml:\n", .{d.command});
+            for (d.needs) |n| try t.row(n, p.?.setting(n).?.description);
+        }
+        try t.add("\nEffects:\n", .{});
+        for (d.effects) |effect| try t.add("  {s}\n", .{effect});
+        try t.add("\nExamples:\n", .{});
+        for (d.examples) |example| try t.add("  {s}\n", .{example});
+    }
+    fn done(t: *Text, entries: []const Definition) !core.Outcome {
+        try t.add(exit_codes, .{});
+        return t.c.resultData("help", t.buf.items, .{ .command_definitions = entries });
+    }
+};
+fn start(c: *core.Context) !Text {
+    var t: Text = .{ .c = c };
+    try t.add("ec {s} - ender chest\n\n", .{build_info.version});
+    return t;
 }
-// options.zig fills in a default action only after help returns, so a set action was typed.
-fn explicit(o: Options) bool {
-    return o.action.len > 0;
-}
-fn definition(c: *core.Context, p: plugin.Plugin, cmd: plugin.Command) !Definition {
-    var opts: std.ArrayList(Option) = .empty;
-    for (cmd.options) |o| try opts.append(c.a, .{ .name = o.name, .type = if (o.kind == .string) .string else .boolean, .description = o.description, .values = o.values, .default = o.default });
-    if (!cmd.passthrough) try opts.appendSlice(c.a, &common);
-    return .{ .command = p.name, .action = cmd.name, .plugin = p.source, .usage = if (cmd.usage.len > 0) cmd.usage else try c.fmt("ec {s} {s} [options]", .{ p.name, cmd.name }), .description = cmd.description, .options = opts.items, .effects = cmd.effects, .examples = cmd.examples };
+
+// Help for `words`: "" for every command, a group such as "plugin", or one command.
+pub fn show(c: *core.Context, words: []const u8, plugins: []const spec.Plugin) !core.Outcome {
+    var t = try start(c);
+    var entries: std.ArrayList(Definition) = .empty;
+    if (cli.find(words)) |s| {
+        const d = try coreDefinition(c, s);
+        try entries.append(c.a, d);
+        try t.detail(d, null);
+        return t.done(entries.items);
+    }
+    const group = words.len > 0;
+    const scope = if (group) try c.fmt("ec {s}", .{words}) else "ec";
+    try t.add("Usage: {s} <command> [options]\n\nCommands:\n", .{scope});
+    for (cli.specs) |s| {
+        if (group and !core.eql(u8, s.group(), words)) continue;
+        try entries.append(c.a, try coreDefinition(c, s));
+        if (group) try t.add("  {s:<12} {s}\n", .{ s.action(), s.description }) else if (s.action().len == 0 and s.command != .version) try t.add("  {s:<12} {s}\n", .{ s.words, s.description });
+    }
+    if (!group) {
+        for (cli.groups) |g| try t.add("  {s:<12} {s}\n", .{ g.name, g.description });
+        if (plugins.len > 0) try t.add("\nPlugins:\n", .{});
+        for (plugins) |p| {
+            try t.add("  {s:<12} {s}\n", .{ p.name, p.description });
+            for (p.commands) |cmd| try entries.append(c.a, try pluginDefinition(c, p, cmd));
+        }
+    }
+    try t.add("\nOptions:\n", .{});
+    try t.options(&common);
+    if (!group) try t.row("--version", cli.spec(.version).?.description);
+    try t.add("\nUse {s} <command> --help for options, effects, and examples.\nAdd --json for structured command definitions.\n", .{scope});
+    return t.done(entries.items);
 }
 // Help for one plugin, or for one of its commands. Reads only the manifest.
-pub fn showPlugin(c: *core.Context, p: plugin.Plugin, cmd: ?plugin.Command) !void {
+pub fn showPlugin(c: *core.Context, p: spec.Plugin, cmd: ?spec.Command) !core.Outcome {
+    var t = try start(c);
     var entries: std.ArrayList(Definition) = .empty;
-    var text: std.ArrayList(u8) = .empty;
-    try append(c, &text, "ec {s} - ender chest\n\n", .{@import("main.zig").version});
     if (cmd) |one| {
-        const d = try definition(c, p, one);
+        const d = try pluginDefinition(c, p, one);
         try entries.append(c.a, d);
-        try detail(c, &text, d);
-    } else {
-        try append(c, &text, "{s}\n\nUsage: ec {s} <command> [options]\n\nCommands:\n", .{ p.description, p.name });
-        for (p.commands) |one| {
-            try append(c, &text, "  {s:<12} {s}{s}\n", .{ one.name, one.description, if (p.default != null and core.eql(u8, p.default.?, one.name)) " (default)" else "" });
-            try entries.append(c.a, try definition(c, p, one));
-        }
-        if (p.settings.len > 0) {
-            try append(c, &text, "\nSettings, under [plugins.{s}] in ender-chest.toml:\n", .{p.name});
-            for (p.settings) |s| try append(c, &text, "  {s:<23} {s}{s}{s}\n", .{ s.name, s.description, if (s.required) " Required." else "", if (s.kind == .secret) " Use { secret = \"NAME\" }." else "" });
-        }
-        try append(c, &text, "\nSource: {s}{s}\n", .{ p.source, if (p.commit) |cm| try c.fmt(" @ {s}", .{cm}) else "" });
-        try append(c, &text, "\nUse ec {s} <command> --help for options, effects, and examples.\n", .{p.name});
+        try t.detail(d, p);
+        return t.done(entries.items);
     }
-    try append(c, &text, "\nExit codes: 0 success, 1 operation failed or unreachable, 2 invalid arguments.\n", .{});
-    try c.resultData("help", true, text.items, .{ .command_definitions = entries.items });
+    try t.add("{s}\n\nUsage: ec {s} <command> [options]\n\nCommands:\n", .{ p.description, p.name });
+    for (p.commands) |one| {
+        try t.add("  {s:<12} {s}{s}\n", .{ one.name, one.description, if (p.default != null and core.eql(u8, p.default.?, one.name)) " (default)" else "" });
+        try entries.append(c.a, try pluginDefinition(c, p, one));
+    }
+    if (p.settings.len > 0) {
+        try t.add("\nSettings, under [plugins.{s}] in ender-chest.toml:\n", .{p.name});
+        for (p.settings) |s| try t.add("  {s:<23} {s}{s}{s}\n", .{ s.name, s.description, if (s.required) " Required." else "", if (s.kind == .secret) " Use { secret = \"NAME\" }." else "" });
+    }
+    try t.add("\nSource: {s}{s}\n", .{ p.source, if (p.commit) |cm| try c.fmt(" @ {s}", .{cm}) else "" });
+    try t.add("\nUse ec {s} <command> --help for options, effects, and examples.\n", .{p.name});
+    return t.done(entries.items);
 }

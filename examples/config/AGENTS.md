@@ -1,21 +1,16 @@
 # Editing this config
 
-This repository is a machine-config checkout consumed by `ec`. Global agent instructions live in `agents/shared/AGENTS.md`; this file describes work on the checkout itself.
+This repository is a machine-config checkout that `ec` applies. `agents/shared/AGENTS.md` holds the user's global agent instructions; this file is about editing the checkout itself. `ender-chest.toml` lists what sync applies, and its first lines link to the reference for each key.
 
-Keep shared preferences in `agents/` and managed home files in `home/`. Put local skills in `skills/<name>/SKILL.md`, and record external skill sources in `skills/manifest.json`. A new home file needs both its copy under `home/` and an entry in `ender-chest.toml`'s `files` list. Setup steps, Brewfiles, and plugins are listed there too.
+A new home file needs both its copy under `home/` and an entry in `files`. Put local skills in `skills/<name>/SKILL.md`. Keep tokens, account sessions, SSH private keys, and generated agent settings out of Git; plugins read secrets from each machine, as [secrets](https://github.com/KayleeWilliams/ender-chest/blob/main/docs/plugins.md#secrets) describes.
 
-Keep tokens, account sessions, SSH private keys, generated agent configs, and personal device overrides out of Git. Plugin settings in `ender-chest.toml` refer to secrets as `{ secret = "NAME" }`; each device stores the value with `ec secret set NAME` in `~/.config/ender-chest/secrets/`.
-
-Validate edits in a temporary home before applying them to a real device. From this checkout, with `ec` already installed:
+Check edits in a temporary home before applying them to a real machine. Sync verifies what it applied:
 
 ```sh
 test_home=$(mktemp -d)
 EC_NO_UPDATE=1 HOME="$test_home" ec sync --repo "$PWD" --skip-packages
-EC_NO_UPDATE=1 HOME="$test_home" ec verify --repo "$PWD"
 ```
 
-Inspect the generated agent instructions, settings, and skill links in that temporary directory. The example has no external skill sources; if you add any, review the manifest before running this check because sync can download them. Delete the temporary directory after inspection.
+Inspect the installed files in that directory, then delete it.
 
-Update `DEVICES.md` when the user adds, renames, or retires a machine. It holds hostnames and account names, never credentials.
-
-Treat `ec push --dry-run` as a write to this checkout. Review its diff before committing, and preserve unrelated edits. Test plugin commands that reach other machines, such as `wol`, `kde`, and proxy restarts, only against devices the user asked to use.
+`ec push --dry-run` writes into this checkout. Review its diff before committing, and preserve unrelated edits. Update `DEVICES.md` when the user adds, renames, or retires a machine.

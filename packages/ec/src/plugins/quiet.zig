@@ -1,4 +1,3 @@
-// Stops stale dev servers, watchers, headless browsers, and containers before a benchmark.
 const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("../core.zig");
@@ -7,9 +6,12 @@ const C = core.Context;
 const Call = runtime.Call;
 const eq = core.eql;
 
+pub const manifest = @embedFile("quiet.toml");
+
+// quiet.toml's descriptions say "2 hours"; change them with this.
 const idle_seconds = 2 * 60 * 60;
 
-pub const Proc = struct { pid: i32, ppid: i32, age: i64, cpu: f64, command: []const u8 };
+const Proc = struct { pid: i32, ppid: i32, age: i64, cpu: f64, command: []const u8 };
 const Server = struct { pid: i32, kind: []const u8, age: i64, cwd: []const u8 = "", reason: []const u8 = "" };
 const Container = struct { id: []const u8, name: []const u8 };
 const Busy = struct { pid: i32, cpu: f64, name: []const u8 };
@@ -46,14 +48,14 @@ fn guarded(command: []const u8) bool {
     return false;
 }
 
-pub fn kind(command: []const u8) ?[]const u8 {
+fn kind(command: []const u8) ?[]const u8 {
     if (guarded(command)) return null;
     for (signatures) |s| if (std.mem.indexOf(u8, command, s.needle) != null) return s.kind;
     return null;
 }
 
 // ps prints elapsed time as [[dd-]hh:]mm:ss.
-pub fn elapsed(text: []const u8) ?i64 {
+fn elapsed(text: []const u8) ?i64 {
     var days: i64 = 0;
     var rest = text;
     if (std.mem.indexOfScalar(u8, text, '-')) |dash| {
@@ -68,7 +70,7 @@ pub fn elapsed(text: []const u8) ?i64 {
     return days * 86400 + total;
 }
 
-pub fn parsePs(c: *C, text: []const u8) ![]Proc {
+fn parsePs(c: *C, text: []const u8) ![]Proc {
     var list: std.ArrayList(Proc) = .empty;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
@@ -101,15 +103,17 @@ fn inside(dir: []const u8, p: []const u8) bool {
     return eq(u8, dir, p) or (std.mem.startsWith(u8, p, dir) and p.len > dir.len and p[dir.len] == '/');
 }
 
-pub fn run(c: *C, call: Call) !bool {
-    if (!eq(u8, call.command, "stop")) return c.fail("Unknown quiet command {s}.", .{call.command});
+pub const commands = struct {
+    pub const stop = stopAll;
+};
+fn stopAll(c: *C, call: Call) !core.Outcome {
     const all = call.flag("all");
     const dry_run = call.flag("dry-run");
     const listed = try c.capture(&.{ "ps", "-x", "-U", try c.fmt("{d}", .{std.c.getuid()}), "-o", "pid=,ppid=,etime=,pcpu=,command=" }, null, 15);
     if (!core.success(listed.term)) return c.fail("ps failed: {s}", .{core.trim(listed.stderr)});
     const procs = try parsePs(c, listed.stdout);
 
-    // Keep this process's ancestors (the agent that called ec) and the caller's worktree.
+    // The agent that called ec is an ancestor of this process.
     var ancestors: std.AutoHashMapUnmanaged(i32, void) = .empty;
     var pid: i32 = std.c.getpid();
     var hops: usize = 0;
@@ -171,7 +175,6 @@ pub fn run(c: *C, call: Call) !bool {
         }
     }
 
-    // Report the heaviest processes left, without touching them.
     var busy: std.ArrayList(Busy) = .empty;
     for (procs) |p| {
         if (p.cpu < 10 or ancestors.contains(p.pid)) continue;
@@ -199,7 +202,7 @@ pub fn run(c: *C, call: Call) !bool {
         for (containers) |ct| try text.appendSlice(c.a, try c.fmt("  {s:<16} {s}\n", .{ "container", ct.name }));
     }
     if (kept_here > 0) try text.appendSlice(c.a, try c.fmt("Kept {d} in this worktree.\n", .{kept_here}));
-    if (kept_young > 0) try text.appendSlice(c.a, try c.fmt("Kept {d} started in the last 2h. Add --all to stop them too.\n", .{kept_young}));
+    if (kept_young > 0) try text.appendSlice(c.a, try c.fmt("Kept {d} started in the last {d}h. Add --all to stop them too.\n", .{ kept_young, idle_seconds / 3600 }));
     if (failed.items.len > 0) try text.appendSlice(c.a, try c.fmt("Could not stop {d} process(es).\n", .{failed.items.len}));
     if (containers_failed) try text.appendSlice(c.a, "docker stop failed for some containers.\n");
     if (busiest.len > 0) {
@@ -210,9 +213,10 @@ pub fn run(c: *C, call: Call) !bool {
     if (disk_free_gb) |gb| try text.appendSlice(c.a, try c.fmt("Disk free: {d} GB.\n", .{gb}));
 
     const ok = failed.items.len == 0 and !containers_failed;
-    if (!ok) c.error_code = "stop_failed";
-    try c.resultData("quiet stop", ok, core.trim(text.items), .{ .dry_run = dry_run, .stopped = stop.items, .containers = containers, .kept_in_worktree = kept_here, .kept_recent = kept_young, .failed = failed.items, .busiest = busiest, .disk_free_gb = disk_free_gb });
-    return ok;
+    const message = core.trim(text.items);
+    const data = .{ .dry_run = dry_run, .stopped = stop.items, .containers = containers, .kept_in_worktree = kept_here, .kept_recent = kept_young, .failed = failed.items, .busiest = busiest, .disk_free_gb = disk_free_gb };
+    if (!ok) return c.failedData("quiet stop", .stop_failed, message, data);
+    return c.resultData("quiet stop", message, data);
 }
 
 fn workingDirs(c: *C, servers: []Server) !void {
@@ -255,7 +259,7 @@ fn runningContainers(c: *C) ![]Container {
     return list.items;
 }
 
-// SIGTERM first so dev servers can clean up, then SIGKILL whatever is left after five seconds.
+// SIGTERM first so dev servers can clean up.
 fn terminate(c: *C, servers: []const Server) !std.ArrayList(i32) {
     var args: std.ArrayList([]const u8) = .empty;
     try args.appendSlice(c.a, &.{ "kill", "-TERM" });

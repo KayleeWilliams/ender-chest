@@ -12,6 +12,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       source_hash: ${{ steps.plan.outputs.source_hash }}
+      targets: ${{ steps.targets.outputs.targets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install archive tools
@@ -23,6 +24,9 @@ jobs:
           (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe)
           hash=$(tr -d '[:space:]' < packages/ec/zig-out/source_hash.txt)
           echo "source_hash=$hash" >> "$GITHUB_OUTPUT"
+      - name: List release targets
+        id: targets
+        run: echo "targets=$(jq -c . packages/ec/src/targets.json)" >> "$GITHUB_OUTPUT"
       - name: Choose the next patch release
         id: plan
         env:
@@ -41,26 +45,15 @@ jobs:
               echo "version=" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            version=$(tools/release-version.sh "$tag")
-          else
-            version=0.0.1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version=$(tools/release-version.sh "$tag")" >> "$GITHUB_OUTPUT"
   binaries:
     needs: plan
     if: needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - target: aarch64-macos.13.0
-            asset: ec-aarch64-macos
-          - target: x86_64-macos.13.0
-            asset: ec-x86_64-macos
-          - target: aarch64-linux-musl
-            asset: ec-aarch64-linux
-          - target: x86_64-linux-musl
-            asset: ec-x86_64-linux
+        include: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install archive tools
@@ -68,15 +61,15 @@ jobs:
       - name: Build the release binary
         run: |
           set -eu
-          (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${{ needs.plan.outputs.version }})
+          (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig }} -Dversion=${{ needs.plan.outputs.version }})
           test "$(tr -d '[:space:]' < packages/ec/zig-out/source_hash.txt)" = "${{ needs.plan.outputs.source_hash }}"
           mkdir -p dist
-          cp packages/ec/zig-out/bin/ec "dist/${{ matrix.asset }}"
+          cp packages/ec/zig-out/bin/ec "dist/ec-${{ matrix.key }}"
           cp packages/ec/zig-out/source_hash.txt dist/source_hash.txt
-          sha256sum "dist/${{ matrix.asset }}" | awk '{print $1}' > "dist/${{ matrix.asset }}.sha256"
+          sha256sum "dist/ec-${{ matrix.key }}" | awk '{print $1}' > "dist/ec-${{ matrix.key }}.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
+          name: ec-${{ matrix.key }}
           path: dist/*
   publish:
     needs: [plan, binaries]
@@ -118,3 +111,33 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "ec $VERSION" \
             --notes "ec $VERSION"$'\n\n'"source $SOURCE_HASH"$'\n'"commit $GITHUB_SHA"
+  template:
+    needs: [plan, publish]
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-latest
+    env:
+      TEMPLATE_TOKEN: ${{ secrets.TEMPLATE_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: env.TEMPLATE_TOKEN != ''
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: env.TEMPLATE_TOKEN != ''
+        with:
+          repository: ${{ github.repository_owner }}/ender-chest-template
+          token: ${{ secrets.TEMPLATE_TOKEN }}
+          path: template
+      - uses: ./.github/actions/private-scan
+        if: env.TEMPLATE_TOKEN != ''
+        with:
+          patterns: ${{ secrets.PRIVATE_PATTERNS }}
+      - name: Publish examples/config to the template
+        if: env.TEMPLATE_TOKEN != ''
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -eu
+          git -C template config user.name "github-actions[bot]"
+          git -C template config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tools/publish-template.sh template --version "$VERSION" --push

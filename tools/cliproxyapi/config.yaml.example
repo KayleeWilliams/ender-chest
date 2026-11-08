@@ -1,5 +1,4 @@
-# Copy to $(brew --prefix)/etc/cliproxyapi.conf on a NEW host only.
-# Replace the client key before starting. Never commit the populated file.
+# Never commit this file once it holds a real client key.
 host: "127.0.0.1"
 port: 8317
 auth-dir: "~/.cli-proxy-api/auth"

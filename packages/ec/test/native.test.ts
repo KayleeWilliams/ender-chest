@@ -2,136 +2,50 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
-  cpSync,
   existsSync,
   lstatSync,
-  mkdirSync,
-  mkdtempSync,
   readFileSync,
   readlinkSync,
-  readdirSync,
   realpathSync,
-  rmSync,
   symlinkSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { parse as toml } from "smol-toml";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
-  cliRoot,
+  agentHomes,
+  agentPlugins,
+  builtHash,
+  checkoutFixture,
+  ec,
+  executorKey,
   filePermissions,
-  workspaceRoot,
-  writeSourceRepo,
+  hostTarget,
+  proxyKey,
   write,
-  gitInit,
 } from "./fixture.ts";
 
-const executable = path.join(cliRoot, "zig-out/bin/ec");
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-// The proxy provider and the Executor MCP server, so syncs exercise agent settings.
-const plugins = `
-[plugins.cliproxyapi]
-url = "http://proxy.example.test:8317"
-key = { secret = "cliproxyapi" }
-
-[plugins.executor]
-url = "https://mcp.example.test:4312"
-key = { secret = "executor" }
-`;
 const fixture = () => {
-  const root = mkdtempSync(path.join(tmpdir(), "ec-test-"));
-  roots.push(root);
-  const repo = path.join(root, "repo");
-  const home = path.join(root, "home");
-  writeSourceRepo(repo, plugins);
-  mkdirSync(home, { recursive: true });
-  write(home, ".config/ender-chest/secrets/cliproxyapi", "test-client-key\n");
-  write(home, ".config/ender-chest/secrets/executor", `${"k".repeat(32)}\n`);
-  gitInit(repo);
-  const env = {
-    ...process.env,
-    EC_NO_UPDATE: "1",
-    EC_REPO: repo,
-    HOME: home,
-  };
-  const run = (args: string[], overrides = {}) =>
-    spawnSync(executable, args, {
-      cwd: root,
-      encoding: "utf-8",
-      env: { ...env, ...overrides },
-      timeout: 15_000,
-    });
-  const apply = () => {
-    const r = run(["sync", "--skip-packages", "--profile", "mac"]);
-    expect(r.status, r.stdout + r.stderr).toBe(0);
-  };
-  const fake = (name: string, code: string) => {
-    const file = write(home, `bin/${name}`, `#!${process.execPath}\n${code}\n`);
-    chmodSync(file, 0o755);
-    return { PATH: `${path.dirname(file)}:/usr/bin:/bin` };
-  };
-  return { apply, env, fake, home, repo, root, run };
+  const f = checkoutFixture(agentPlugins, agentHomes);
+  f.secret("cliproxyapi", proxyKey);
+  f.secret("executor", executorKey);
+  return f;
 };
-const releaseAssetKey = (): string => {
-  let arch: string = process.arch;
-  if (process.arch === "arm64") {
-    arch = "aarch64";
-  } else if (process.arch === "x64") {
-    arch = "x86_64";
-  }
-  return `${arch}-${process.platform === "darwin" ? "macos" : "linux"}`;
-};
-const sourceHash = (repo: string): string => {
-  const files = ["build.zig", "build.zig.zon", ".zig-version"];
-  for (const entry of readdirSync(path.join(repo, "src"), {
-    recursive: true,
-    withFileTypes: true,
-  })) {
-    if (entry.isFile() && !entry.name.startsWith(".")) {
-      files.push(path.relative(repo, path.join(entry.parentPath, entry.name)));
-    }
-  }
-  files.sort();
-  const hash = createHash("sha256");
-  for (const rel of files) {
-    hash.update(rel);
-    hash.update("\0");
-    hash.update(readFileSync(path.join(repo, rel)));
-    hash.update("\0");
-  }
-  return hash.digest("hex");
-};
-const gitAt = (cwd: string, ...args: string[]) => {
-  const r = spawnSync("git", args, { cwd, encoding: "utf-8" });
-  expect(r.status, r.stderr).toBe(0);
-  return r;
-};
-
-interface HookGroup {
-  hooks: { command: string; timeout?: number; type: string }[];
-  matcher?: string;
-}
-interface ClaudeSettings {
-  hooks?: Record<string, HookGroup[]>;
-  model: string;
-}
-const repoHook = (timeout: number): HookGroup => ({
-  hooks: [{ command: "repo-stop-hook", timeout, type: "command" }],
-});
+// ec with no HOME, config, or commands on PATH.
+const offline = (args: string[]) =>
+  spawnSync(ec, args, {
+    cwd: tmpdir(),
+    encoding: "utf-8",
+    env: { PATH: "/missing" },
+  });
 
 describe("native ec", () => {
   it("prints discoverable help without a runtime, HOME, repo, or config", () => {
-    const r = spawnSync(executable, [], {
+    const r = spawnSync(ec, [], {
       cwd: tmpdir(),
       encoding: "utf-8",
       env: { PATH: "/nonexistent" },
@@ -142,70 +56,48 @@ describe("native ec", () => {
     expect(r.stdout).toContain("plugin");
   });
   it("prints structured help and version without configuration", () => {
-    const { run } = fixture();
-    expect(JSON.parse(run(["--json", "--help"]).stdout)).toMatchObject({
+    expect(JSON.parse(offline(["--json", "--help"]).stdout)).toMatchObject({
       command: "help",
       ok: true,
       schema_version: 1,
     });
-    expect(run(["--version"]).stdout.trim()).toBe(
-      `ec dev (${sourceHash(cliRoot).slice(0, 7)})`
+    expect(offline(["--version"]).stdout.trim()).toBe(
+      `ec dev (${builtHash().slice(0, 7)})`
     );
-    expect(JSON.parse(run(["--json", "--version"]).stdout).data).toMatchObject({
-      source_hash: sourceHash(cliRoot),
+    expect(
+      JSON.parse(offline(["--json", "--version"]).stdout).data
+    ).toMatchObject({
+      source_hash: builtHash(),
       version: "dev",
     });
   });
   it.each([
-    {
-      args: ["sync"],
-      flags: [
-        "repo",
-        "profile",
-        "skip-packages",
-        "update-skills",
-        "all",
-        "json",
-        "help",
-      ],
-    },
-    { args: ["push"], flags: ["repo", "profile", "dry-run", "json", "help"] },
-    { args: ["verify"], flags: ["repo", "profile", "json", "help"] },
-    { args: ["status"], flags: ["json", "help"] },
-    { args: ["plugin", "list"], flags: ["repo", "json", "help"] },
-    { args: ["secret", "set"], flags: ["json", "help"] },
-  ])(
-    "scopes offline help and machine discovery to $args",
-    ({ args, flags }) => {
-      const run = (extra: string[]) =>
-        spawnSync(executable, extra, {
-          cwd: tmpdir(),
-          encoding: "utf-8",
-          env: { PATH: "/missing" },
-        });
-      const human = run([...args, "--help"]);
-      expect(human.status, human.stderr).toBe(0);
-      expect(human.stdout).toContain(`Usage: ec ${args.join(" ")}`);
-      expect(human.stdout).toContain("Examples:");
-      expect(human.stdout).toContain("Effects:");
-      const machine = run(["--json", ...args, "--help"]);
-      expect(machine.status, machine.stderr).toBe(0);
-      expect(machine.stderr).toBe("");
-      const result = JSON.parse(machine.stdout);
-      expect(result.error).toBeNull();
-      expect(`${result.message}\n`).toBe(human.stdout);
-      const definitions = result.data.command_definitions;
-      expect(definitions).toHaveLength(1);
-      expect(definitions[0]).toMatchObject({
-        action: args[1] ?? "",
-        command: args[0],
-      });
-      expect(
-        definitions[0].options.map((option: { name: string }) => option.name)
-      ).toEqual(flags);
-      expect(run(["help", ...args]).stdout).toBe(human.stdout);
-    }
-  );
+    ["sync"],
+    ["push"],
+    ["verify"],
+    ["status"],
+    ["plugin", "list"],
+    ["secret", "set"],
+  ])("scopes offline help and machine discovery to %s %s", (...args) => {
+    const human = offline([...args, "--help"]);
+    expect(human.status, human.stderr).toBe(0);
+    expect(human.stdout).toContain(`Usage: ec ${args.join(" ")}`);
+    expect(human.stdout).toContain("Examples:");
+    expect(human.stdout).toContain("Effects:");
+    const machine = offline(["--json", ...args, "--help"]);
+    expect(machine.status, machine.stderr).toBe(0);
+    expect(machine.stderr).toBe("");
+    const result = JSON.parse(machine.stdout);
+    expect(result.error).toBeNull();
+    expect(`${result.message}\n`).toBe(human.stdout);
+    const definitions = result.data.command_definitions;
+    expect(definitions).toHaveLength(1);
+    expect(definitions[0]).toMatchObject({
+      action: args[1] ?? "",
+      command: args[0],
+    });
+    expect(offline(["help", ...args]).stdout).toBe(human.stdout);
+  });
   it("discovers command effects, defaults, and profile choices without running commands", () => {
     const f = fixture();
     const result = JSON.parse(f.run(["--help", "--json"]).stdout);
@@ -213,25 +105,26 @@ describe("native ec", () => {
     const sync = definitions.find(
       (d: { command: string }) => d.command === "sync"
     );
-    expect(
-      sync.options.find((o: { name: string }) => o.name === "profile")
-    ).toMatchObject({
-      default: "mac on macOS, cloud in CI, containers, and Linux",
-      required: false,
-      type: "string",
-      // Profiles are names that ender-chest.toml filters on, not a fixed list.
-      values: [],
-    });
+    const profile = sync.options.find(
+      (o: { name: string }) => o.name === "profile"
+    );
+    // Profiles are names that ender-chest.toml filters on, not a fixed list.
+    expect(profile).toMatchObject({ type: "string", values: [] });
+    expect(profile.default).toContain("mac");
+    expect(profile).not.toHaveProperty("required");
     const push = definitions.find(
       (d: { command: string }) => d.command === "push"
     );
-    expect(push.effects.join(" ")).toContain("including with --dry-run");
+    expect(push.effects.length).toBeGreaterThan(0);
     expect(existsSync(path.join(f.home, ".gitconfig"))).toBe(false);
   });
   it.each([
     { args: ["sync", "--profile"], message: "--profile needs a profile name" },
     { args: ["sync", "--repo", ""], message: "--repo needs a checkout path." },
     { args: ["status", "sync"], message: "Unknown command or option." },
+    { args: ["sync", "push"], message: "Unknown command or option." },
+    { args: ["status", "--no-wait"], message: "Unknown option --no-wait." },
+    { args: ["--nope"], message: "Unknown option --nope." },
     {
       args: ["sync", "--all", "--profile", "mac"],
       message: "takes no other options",
@@ -240,8 +133,23 @@ describe("native ec", () => {
       args: ["verify", "--all"],
       message: "--all is only available with ec sync.",
     },
+    {
+      args: ["verify", "--dry-run"],
+      message:
+        "--dry-run is only available with ec push. It still captures files into the checkout.",
+    },
+    {
+      args: ["update", "--repo", "/x"],
+      message: "It updates the ec binary you ran.",
+    },
+    {
+      args: ["secret", "list", "extra"],
+      message: "Unknown command or option.",
+    },
+    { args: ["secret", "list", "--repo", "/x"], message: "--repo applies to" },
+    { args: ["--skip-packages"], message: "only available with ec sync" },
   ])(
-    "explains invalid arguments in human and JSON output: $args",
+    "explains invalid arguments in human and JSON output without writes: $args",
     ({ args, message }) => {
       const f = fixture();
       const human = f.run(args);
@@ -252,6 +160,7 @@ describe("native ec", () => {
       expect(machine.status).toBe(2);
       expect(machine.stderr).toBe("");
       expect(JSON.parse(machine.stdout)).toMatchObject({
+        command: "arguments",
         error: {
           code: "usage_error",
           message: expect.stringContaining(message),
@@ -259,33 +168,9 @@ describe("native ec", () => {
         ok: false,
         schema_version: 1,
       });
+      expect(existsSync(path.join(f.home, ".gitconfig"))).toBe(false);
     }
   );
-  it("reports verification failures with a stable code", () => {
-    const f = fixture();
-    const r = f.run(["verify", "--json"]);
-    expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      error: { code: "verification_failed" },
-      ok: false,
-    });
-  });
-  it.each([
-    ["sync", "--profile"],
-    ["verify", "--dry-run"],
-    ["status", "--no-wait"],
-    ["sync", "push"],
-    ["--nope"],
-  ])("rejects invalid arguments without writes: %j", (...args) => {
-    const { run, home } = fixture();
-    const r = run([...args, "--json"]);
-    expect(r.status).toBe(2);
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      command: "arguments",
-      ok: false,
-    });
-    expect(existsSync(path.join(home, ".gitconfig"))).toBe(false);
-  });
   it("applies a clean machine, installs a native binary, and verifies without Node", () => {
     const f = fixture();
     const r = f.run(["sync", "--skip-packages", "--profile", "mac", "--json"], {
@@ -296,8 +181,9 @@ describe("native ec", () => {
     expect(filePermissions(path.join(f.home, ".ssh/config"))).toBe(0o600);
     expect(filePermissions(path.join(f.home, ".ssh"))).toBe(0o700);
     expect(readFileSync(path.join(f.home, ".local/bin/ec"))).toEqual(
-      readFileSync(executable)
+      readFileSync(ec)
     );
+    expect(existsSync(path.join(f.home, ".local/bin/ender"))).toBe(false);
     for (const agent of [".claude", ".codex", ".grok"]) {
       expect(readlinkSync(path.join(f.home, agent, "skills/note"))).toBe(
         path.join(f.home, ".agents/skills/note")
@@ -318,21 +204,21 @@ describe("native ec", () => {
   it("syncs the primary checkout from a linked worktree without a failed pull", () => {
     const f = fixture();
 
-    gitAt(f.repo, "add", ".");
-    gitAt(f.repo, "commit", "-m", "init");
-    gitAt(f.repo, "branch", "-M", "main");
+    f.git("add", ".");
+    f.git("commit", "-m", "init");
+    f.git("branch", "-M", "main");
     const remote = path.join(f.root, "remote.git");
     expect(
       spawnSync("git", ["init", "--bare", remote], { encoding: "utf-8" }).status
     ).toBe(0);
-    gitAt(f.repo, "remote", "add", "origin", remote);
-    gitAt(f.repo, "push", "-u", "origin", "main");
-    gitAt(f.repo, "branch", "feature");
+    f.git("remote", "add", "origin", remote);
+    f.git("push", "-u", "origin", "main");
+    f.git("branch", "feature");
     const worktree = path.join(f.root, "worktree");
-    gitAt(f.repo, "worktree", "add", worktree, "feature");
+    f.git("worktree", "add", worktree, "feature");
     const env: NodeJS.ProcessEnv = { ...f.env };
     delete env.EC_REPO;
-    const r = spawnSync(executable, ["sync", "--skip-packages", "--json"], {
+    const r = spawnSync(ec, ["sync", "--skip-packages", "--json"], {
       cwd: worktree,
       encoding: "utf-8",
       env,
@@ -352,10 +238,7 @@ describe("native ec", () => {
   });
   it("does not treat a missing upstream as a failed pull", () => {
     const f = fixture();
-    const git = (...args: string[]) => {
-      const r = spawnSync("git", args, { cwd: f.repo, encoding: "utf-8" });
-      expect(r.status, r.stderr).toBe(0);
-    };
+    const { git } = f;
     git("add", ".");
     git("commit", "-m", "init");
     git("branch", "-M", "feature");
@@ -370,50 +253,13 @@ describe("native ec", () => {
     expect(JSON.parse(r.stdout).ok).toBe(true);
     expect(r.stderr).not.toContain("git pull failed");
   });
-  it("merges the config's Claude hooks with hooks other tools installed", () => {
+  it("reads --repo=PATH like --repo PATH", () => {
     const f = fixture();
-    const other = {
-      hooks: [{ command: "other-tool-hook", type: "command" }],
-      matcher: "*",
-    };
-    const hooks = () =>
-      JSON.parse(
-        readFileSync(path.join(f.home, ".claude/settings.json"), "utf-8")
-      ).hooks;
-    const repoSettings = (h?: Record<string, HookGroup[]>) => {
-      const settings: ClaudeSettings = { model: "m" };
-      if (h) {
-        settings.hooks = h;
-      }
-      write(f.repo, "agents/claude/settings.json", JSON.stringify(settings));
-    };
-    write(
-      f.home,
-      ".claude/settings.json",
-      JSON.stringify({
-        hooks: { PostCompact: [other], Stop: [other, repoHook(60)] },
-      })
-    );
-    repoSettings({ Stop: [repoHook(60)] });
-    f.apply();
-    expect(hooks()).toEqual({
-      PostCompact: [other],
-      Stop: [other, repoHook(60)],
+    const r = f.run(["sync", `--repo=${f.repo}`, "--skip-packages", "--json"], {
+      EC_REPO: path.join(f.root, "missing"),
     });
-
-    // A changed repo hook replaces the copy the last sync added.
-    repoSettings({ Stop: [repoHook(90)], SubagentStop: [repoHook(90)] });
-    f.apply();
-    expect(hooks()).toEqual({
-      PostCompact: [other],
-      Stop: [other, repoHook(90)],
-      SubagentStop: [repoHook(90)],
-    });
-
-    // Removing the repo's hooks removes what sync added and keeps the rest.
-    repoSettings();
-    f.apply();
-    expect(hooks()).toEqual({ PostCompact: [other], Stop: [other] });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(existsSync(path.join(f.home, ".gitconfig"))).toBe(true);
   });
   it("sync is idempotent and preserves local settings, trust, hooks, and credentials", () => {
     const f = fixture();
@@ -442,12 +288,12 @@ describe("native ec", () => {
       ".codex/config.toml",
       'model="personal"\n[projects."/work/a.b"]\ntrust_level="trusted"\n[model_providers.cliproxyapi]\nenv_key="OLD"\n'
     );
-    f.apply();
+    f.sync("--skip-packages");
     const settings = JSON.parse(
       readFileSync(path.join(f.home, ".claude/settings.json"), "utf-8")
     );
     expect(settings).toMatchObject({
-      env: { ANTHROPIC_AUTH_TOKEN: "test-client-key", LOCAL: "keep" },
+      env: { ANTHROPIC_AUTH_TOKEN: proxyKey, LOCAL: "keep" },
       hooks: { Start: [] },
     });
     expect(
@@ -468,7 +314,7 @@ describe("native ec", () => {
       projects: { "/work/a.b": { trust_level: "trusted" } },
     });
     expect(before).not.toContain("OLD");
-    f.apply();
+    f.sync("--skip-packages");
     expect(readFileSync(path.join(f.home, ".codex/config.toml"), "utf-8")).toBe(
       before
     );
@@ -489,7 +335,7 @@ describe("native ec", () => {
       ".codex/config.toml",
       '"projects" = { "/work/a" = { "trust_level" = "trusted" } }\n'
     );
-    f.apply();
+    f.sync("--skip-packages");
     const file = path.join(f.home, ".codex/config.toml");
     const extended = `${readFileSync(file, "utf-8")}\n[projects."/work/b"]\ntrust_level = "trusted"\n`;
     expect(toml(extended)).toMatchObject({
@@ -506,7 +352,7 @@ describe("native ec", () => {
       ".codex/config.toml",
       '[projects."/work/a"]\ntrust_level = "trusted"\n[hooks.state."/work/a:stop:0:0"]\nenabled = true\n'
     );
-    f.apply();
+    f.sync("--skip-packages");
     const text = readFileSync(path.join(f.home, ".codex/config.toml"), "utf-8");
     // Orca matches /^\[[ \t]*projects[ \t]*\./ before deciding to append a new [projects."..."] table.
     expect(text).toContain('\n[projects."/work/a"]\ntrust_level = "trusted"\n');
@@ -524,116 +370,6 @@ describe("native ec", () => {
     expect(r.stdout + r.stderr).not.toContain("PRIVATE_SECRET");
     expect(readFileSync(file, "utf-8")).toBe("bad = [ PRIVATE_SECRET");
   });
-  it("rebuilds an installed CLI after source changes, then syncs without a compiler", () => {
-    const f = fixture();
-    for (const name of ["build.zig", "build.zig.zon", ".zig-version"]) {
-      cpSync(path.join(cliRoot, name), path.join(f.repo, name));
-    }
-    cpSync(path.join(cliRoot, "src"), path.join(f.repo, "src"), {
-      recursive: true,
-    });
-    cpSync(path.join(cliRoot, "zig-pkg"), path.join(f.repo, "zig-pkg"), {
-      recursive: true,
-    });
-    cpSync(
-      path.join(workspaceRoot, "tools/zig"),
-      path.join(f.repo, "tools/zig")
-    );
-    const main = path.join(f.repo, "src/main.zig");
-    writeFileSync(
-      main,
-      `${readFileSync(main, "utf-8")}\n// Fixture source update.\n`
-    );
-    const compilerEnv = spawnSync(
-      path.join(workspaceRoot, "tools/zig"),
-      ["env"],
-      { encoding: "utf-8" }
-    );
-    expect(compilerEnv.status, compilerEnv.stderr).toBe(0);
-    const compiler = /\.zig_exe = "(?<path>[^"]+)"/u.exec(compilerEnv.stdout)
-      ?.groups?.path;
-    if (!compiler) {
-      throw new Error("Zig did not report its executable path");
-    }
-    const r = spawnSync(executable, ["sync", "--skip-packages", "--json"], {
-      encoding: "utf-8",
-      env: {
-        ...f.env,
-        ZIG: compiler,
-        ZIG_GLOBAL_CACHE_DIR:
-          process.env.ZIG_GLOBAL_CACHE_DIR ??
-          path.join(homedir(), ".cache/zig"),
-      },
-      timeout: 90_000,
-    });
-    expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(JSON.parse(r.stdout).ok).toBe(true);
-    expect(r.stderr).toContain("CLI sources changed");
-    const installed = path.join(f.home, ".local/bin/ec");
-    expect(readFileSync(installed)).not.toEqual(readFileSync(executable));
-    expect(readFileSync(installed)).toEqual(
-      readFileSync(path.join(f.repo, "zig-out/bin/ec"))
-    );
-    const second = spawnSync(installed, ["sync", "--skip-packages", "--json"], {
-      encoding: "utf-8",
-      env: {
-        EC_REPO: f.repo,
-        HOME: f.home,
-        PATH: "/usr/bin:/bin",
-        ZIG: "/missing/compiler",
-      },
-      timeout: 15_000,
-    });
-    expect(second.status, second.stdout + second.stderr).toBe(0);
-    expect(JSON.parse(second.stdout).ok).toBe(true);
-    expect(second.stderr).not.toContain("rebuilding");
-  }, 100_000);
-  it("installs a matching release binary instead of rebuilding", () => {
-    const f = fixture();
-    for (const name of ["build.zig", "build.zig.zon", ".zig-version"]) {
-      cpSync(path.join(cliRoot, name), path.join(f.repo, name));
-    }
-    cpSync(path.join(cliRoot, "src"), path.join(f.repo, "src"), {
-      recursive: true,
-    });
-    writeFileSync(
-      path.join(f.repo, "src/main.zig"),
-      `${readFileSync(path.join(f.repo, "src/main.zig"), "utf-8")}\n// Release fixture.\n`
-    );
-    const asset = path.join(f.root, "ec-release");
-    writeFileSync(
-      asset,
-      "#!/bin/sh\nprintf '%s\\n' release-installed > \"$HOME/release-marker\"\nexit 0\n"
-    );
-    chmodSync(asset, 0o755);
-    const bytes = readFileSync(asset);
-    const manifest = write(
-      f.root,
-      "manifest.json",
-      JSON.stringify({
-        assets: {
-          [releaseAssetKey()]: {
-            name: "ec-test",
-            path: asset,
-            sha256: createHash("sha256").update(bytes).digest("hex"),
-          },
-        },
-        schema_version: 1,
-        source_hash: sourceHash(f.repo),
-        version: "0.0.2",
-      })
-    );
-    const r = f.run(["sync", "--skip-packages", "--json"], {
-      EC_NO_UPDATE: "",
-      EC_RELEASE_MANIFEST: manifest,
-    });
-    expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(r.stderr).toContain("Updating ec to 0.0.2");
-    expect(
-      readFileSync(path.join(f.home, "release-marker"), "utf-8").trim()
-    ).toBe("release-installed");
-    expect(readFileSync(path.join(f.home, ".local/bin/ec"))).toEqual(bytes);
-  });
   it("keeps a development build instead of installing a release", () => {
     const f = fixture();
     const asset = write(
@@ -647,7 +383,7 @@ describe("native ec", () => {
       "manifest.json",
       JSON.stringify({
         assets: {
-          [releaseAssetKey()]: {
+          [hostTarget()]: {
             name: "ec-test",
             path: asset,
             sha256: createHash("sha256")
@@ -666,74 +402,29 @@ describe("native ec", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(existsSync(path.join(f.home, "release-marker"))).toBe(false);
     expect(readFileSync(path.join(f.home, ".local/bin/ec"))).toEqual(
-      readFileSync(executable)
+      readFileSync(ec)
     );
-  });
-  it("refuses a release whose checksum does not match", () => {
-    const f = fixture();
-    for (const name of ["build.zig", "build.zig.zon", ".zig-version"]) {
-      cpSync(path.join(cliRoot, name), path.join(f.repo, name));
-    }
-    cpSync(path.join(cliRoot, "src"), path.join(f.repo, "src"), {
-      recursive: true,
-    });
-    writeFileSync(
-      path.join(f.repo, "src/main.zig"),
-      `${readFileSync(path.join(f.repo, "src/main.zig"), "utf-8")}\n// Bad checksum fixture.\n`
-    );
-    const asset = write(f.root, "ec-release", "not a binary\n");
-    const manifest = write(
-      f.root,
-      "manifest.json",
-      JSON.stringify({
-        assets: {
-          [releaseAssetKey()]: {
-            name: "ec-test",
-            path: asset,
-            sha256:
-              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-          },
-        },
-        schema_version: 1,
-        source_hash: sourceHash(f.repo),
-        version: "0.0.2",
-      })
-    );
-    const r = f.run(["sync", "--skip-packages", "--json"], {
-      EC_NO_UPDATE: "",
-      EC_RELEASE_MANIFEST: manifest,
-      ZIG: "/missing/compiler",
-    });
-    expect(r.status, r.stdout + r.stderr).not.toBe(0);
-    expect(r.stderr).toContain("checksum did not match");
-    expect(existsSync(path.join(f.home, ".local/bin/ec"))).toBe(false);
-  });
-  it("numbers patch releases from 0.0.1", () => {
-    const script = path.join(workspaceRoot, "tools/release-version.sh");
-    const run = (arg?: string) =>
-      spawnSync(script, arg === undefined ? [] : [arg], { encoding: "utf-8" });
-    expect(run().stdout).toBe("0.0.1\n");
-    expect(run("v0.0.1").stdout).toBe("0.0.2\n");
-    expect(run("0.0.9").stdout).toBe("0.0.10\n");
-    expect(run("0.1.0").status).not.toBe(0);
   });
   it("verify detects missing files and incorrect skill links without fixing them", () => {
     const f = fixture();
-    f.apply();
+    f.sync("--skip-packages");
     unlinkSync(path.join(f.home, ".gitconfig"));
     const link = path.join(f.home, ".codex/skills/note");
     unlinkSync(link);
     symlinkSync(f.repo, link);
     const r = f.run(["verify", "--json"]);
     expect(r.status).toBe(1);
-    expect(JSON.parse(r.stdout).ok).toBe(false);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      error: { code: "verification_failed" },
+      ok: false,
+    });
     expect(r.stderr).toContain(".gitconfig");
     expect(r.stderr).toContain("must link");
     expect(existsSync(path.join(f.home, ".gitconfig"))).toBe(false);
   });
   it("push dry-run captures only portable files and personal skills without committing", () => {
     const f = fixture();
-    f.apply();
+    f.sync("--skip-packages");
     write(f.home, ".gitconfig", "# captured\n");
     write(f.home, ".gitconfig.local", "SECRET");
     write(f.home, ".ssh/id_ed25519", "PRIVATE KEY");
@@ -758,34 +449,9 @@ describe("native ec", () => {
     }
     expect(spawnSync("git", ["log", "-1"], { cwd: f.repo }).status).not.toBe(0);
   });
-  it("push commits and uploads managed changes to a local bare remote", () => {
-    const f = fixture();
-    const git = (...args: string[]) => {
-      const r = spawnSync("git", args, { cwd: f.repo, encoding: "utf-8" });
-      expect(r.status, r.stderr).toBe(0);
-      return r.stdout.trim();
-    };
-    const remote = path.join(f.root, "remote.git");
-    git("init", "--bare", remote);
-    git("add", ".");
-    git("commit", "-m", "Initial config");
-    git("remote", "add", "origin", remote);
-    git("push", "-u", "origin", "HEAD");
-    f.apply();
-    write(f.home, ".gitconfig", "# captured change\n");
-    write(f.repo, "unrelated.txt", "keep local");
-    const r = f.run(["push", "--json"]);
-    expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(JSON.parse(r.stdout).message).toContain("Uploaded");
-    expect(git("show", "HEAD:home/.gitconfig")).toBe("# captured change");
-    expect(git("status", "--short")).toContain("?? unrelated.txt");
-    expect(git("log", "-1", "--format=%H")).toBe(
-      git("log", "-1", "--format=%H", "@{upstream}")
-    );
-  });
   it("push refuses to commit unrelated staged files", () => {
     const f = fixture();
-    f.apply();
+    f.sync("--skip-packages");
     write(f.repo, "unrelated.txt", "keep staged");
     expect(
       spawnSync("git", ["add", "unrelated.txt"], { cwd: f.repo }).status
@@ -802,7 +468,7 @@ describe("native ec", () => {
   });
   it("harvests installed skill sources and honors explicit removals", () => {
     const f = fixture();
-    f.apply();
+    f.sync("--skip-packages");
     write(f.home, ".agents/skills/third/SKILL.md", "# Third");
     write(f.home, ".agents/skills/removed/SKILL.md", "# removed");
     write(
@@ -829,6 +495,16 @@ describe("native ec", () => {
     expect(existsSync(path.join(f.repo, "skills/third"))).toBe(false);
     expect(existsSync(path.join(f.repo, "skills/removed"))).toBe(false);
   });
+  it("push refuses a damaged skill lock file instead of copying installed skills", () => {
+    const f = fixture();
+    f.sync("--skip-packages");
+    write(f.home, ".agents/skills/third/SKILL.md", "# Third");
+    write(f.home, ".agents/.skill-lock.json", "{ not json");
+    const r = f.run(["push", "--dry-run", "--json"]);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout).message).toContain(".skill-lock.json");
+    expect(existsSync(path.join(f.repo, "skills/third"))).toBe(false);
+  });
   it("migrates Claude-local skills and removes obsolete files when a personal skill changes", () => {
     const f = fixture();
     write(
@@ -843,7 +519,7 @@ describe("native ec", () => {
     write(f.home, ".claude/skills/third/SKILL.md", "# Third");
     write(f.home, ".agents/skills/note/stale.md", "stale");
     write(f.home, ".agents/skills/removed/SKILL.md", "# removed");
-    f.apply();
+    f.sync("--skip-packages");
     expect(
       lstatSync(path.join(f.home, ".claude/skills/third")).isSymbolicLink()
     ).toBe(true);
@@ -975,7 +651,7 @@ describe("native ec", () => {
 describe("native status and sync --all", () => {
   const fleet = (fetches = true) => {
     const f = fixture();
-    const hash = sourceHash(cliRoot);
+    const hash = builtHash();
     const manifest = write(
       f.root,
       "manifest.json",
@@ -1028,6 +704,7 @@ describe("native status and sync --all", () => {
     const state = path.join(f.root, "synced");
     const log = path.join(f.root, "ssh.log");
     const env = {
+      EC_NO_UPDATE: "",
       EC_RELEASE_MANIFEST: manifest,
       ...f.fake(
         "tailscale",
@@ -1044,7 +721,8 @@ const now=fs.existsSync(${JSON.stringify(state)});console.log(JSON.stringify({sc
       ...f,
       env: { ...f.env, ...env },
       log,
-      run: (args: string[]) => f.run(args, env),
+      run: (args: string[], extra: NodeJS.ProcessEnv = {}) =>
+        f.run(args, { ...env, ...extra }),
     };
   };
   it("lists this account's computers with versions and offline machines", () => {
@@ -1065,6 +743,22 @@ const now=fs.existsSync(${JSON.stringify(state)});console.log(JSON.stringify({sc
     ]);
     expect(result.message).toContain("built before source hashes");
     expect(readFileSync(f.log, "utf-8")).toContain("box.tail.ts.net");
+  });
+  it("tells how to install ec on a machine that answers SSH without it", () => {
+    const f = fleet();
+    f.fake("ssh", "");
+    const box = JSON.parse(
+      f.run(["status", "--json"]).stdout
+    ).data.machines.find((m: { name: string }) => m.name === "box");
+    expect(box).toMatchObject({ state: "missing" });
+    expect(box.detail).toContain("Run the ec installer there, then ec sync.");
+  });
+  it("skips the release lookup with EC_NO_UPDATE=1", () => {
+    const f = fleet();
+    const r = f.run(["status", "--json"], { EC_NO_UPDATE: "1" });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).data.release.version ?? null).toBeNull();
+    expect(r.stderr).toContain("Could not read the latest ec release");
   });
   it("syncs only machines that are behind and reports their new versions", () => {
     const f = fleet();

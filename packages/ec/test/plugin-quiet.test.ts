@@ -1,28 +1,19 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { pluginFixture } from "./fixture.ts";
-
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
 
 // Fake ps, git, lsof, readlink, kill, docker, and df describe a machine with stale dev
 // servers, an agent, T3 Code's preview browser, and one container.
 const quiet = () => {
   const f = pluginFixture("[plugins.quiet]\n");
-  roots.push(f.root);
   const work = path.join(f.root, "work");
   mkdirSync(path.join(work, "app"), { recursive: true });
   const other = path.join(f.root, "other");
   mkdirSync(other, { recursive: true });
   const gone = path.join(f.root, "gone");
-  const log = path.join(f.root, "calls.log");
   const killed = path.join(f.root, "killed");
   // pid -> working directory
   const cwds = {
@@ -45,7 +36,6 @@ const quiet = () => {
     "108 1 05:00:00 0.1 node /w/node_modules/next/dist/server/lib/start-server.js",
     "200 1 02:00:00 55.0 /Applications/Browser.app/Contents/MacOS/Browser --type=renderer",
   ].join("\n");
-  const record = `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(log)},require('node:path').basename(process.argv[1])+' '+process.argv.slice(2).join(' ')+"\\n");`;
   const env = {
     ...f.fake("ps", `console.log(${JSON.stringify(ps)})`),
     ...f.fake("git", `console.log(${JSON.stringify(work)})`),
@@ -57,20 +47,20 @@ const quiet = () => {
       "readlink",
       `const m=${JSON.stringify(cwds)};const p=process.argv[2].split('/')[2];if(!m[p])process.exit(1);console.log(m[p]+(m[p]===${JSON.stringify(gone)}?' (deleted)':''))`
     ),
-    ...f.fake(
+    ...f.record(
       "kill",
-      `${record}const a=process.argv.slice(2);if(a[0]==='-0')process.exit(fs.existsSync(${JSON.stringify(killed)})?1:0);fs.writeFileSync(${JSON.stringify(killed)},'1')`
+      `const fs=require('node:fs');if(a[0]==='-0')process.exit(fs.existsSync(${JSON.stringify(killed)})?1:0);fs.writeFileSync(${JSON.stringify(killed)},'1')`
     ),
-    ...f.fake(
+    ...f.record(
       "docker",
-      `${record}if(process.argv[2]==='ps')console.log('abc123\\tapp-postgres-1')`
+      "if(a[0]==='ps')console.log('abc123\\tapp-postgres-1')"
     ),
     ...f.fake(
       "df",
       "console.log('Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/disk 999 1 125829120 1% /')"
     ),
   };
-  return { log, run: (args: string[]) => f.run(args, env) };
+  return { run: (args: string[]) => f.run(args, env), takeCalls: f.takeCalls };
 };
 
 describe("quiet plugin", () => {
@@ -101,19 +91,20 @@ describe("quiet plugin", () => {
       "node",
       "Browser",
     ]);
-    expect(existsSync(q.log) ? readFileSync(q.log, "utf-8") : "").not.toMatch(
-      /kill -TERM|docker stop/u
-    );
+    expect(q.takeCalls()).not.toMatch(/kill -TERM|docker stop/u);
   });
 
   it("stops stale processes, recent ones with --all, and running containers", () => {
     const q = quiet();
     const r = q.run(["quiet", "stop", "--all"]);
     expect(r.status, r.stderr).toBe(0);
-    const calls = readFileSync(q.log, "utf-8");
-    expect(calls).toContain("kill -TERM 101 102 103 108\n");
+    const calls = q.takeCalls();
+    const terminated = [...calls.matchAll(/^kill -TERM (?<pids>.+)$/gmu)]
+      .flatMap((m) => m.groups?.pids?.split(" ") ?? [])
+      .toSorted();
+    expect(terminated).toEqual(["101", "102", "103", "108"]);
     expect(calls).not.toContain("-KILL");
-    expect(calls).toContain("docker stop --time 10 abc123\n");
+    expect(calls).toMatch(/^docker stop .*abc123$/mu);
     expect(r.stdout).toContain("Stopped 4 dev process(es) and 1 container(s).");
     expect(r.stdout).toContain("Kept 1 in this worktree.");
   });

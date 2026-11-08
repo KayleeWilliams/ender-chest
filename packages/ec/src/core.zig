@@ -2,6 +2,29 @@ const std = @import("std");
 pub const eql = std.mem.eql;
 pub const Value = std.json.Value;
 pub const cwd = std.Io.Dir.cwd;
+// What went wrong, as JSON results report it. Arguments ec cannot use exit 2; every other failure exits 1.
+pub const Code = enum {
+    operation_failed,
+    usage_error,
+    interaction_required,
+    @"unreachable",
+    verification_failed,
+    stop_failed,
+    sync_failed,
+    pub fn exitCode(code: Code) u8 {
+        return if (code == .usage_error) 2 else 1;
+    }
+};
+// A command's result. main prints it once, as text or as one JSON object.
+pub const Outcome = struct {
+    command: []const u8,
+    message: []const u8,
+    // The result's data as JSON text.
+    data: []const u8 = "null",
+    failure: ?Code = null,
+    // An error message rather than a report. Text output sends it to stderr.
+    diagnostic: bool = false,
+};
 pub const Context = struct {
     a: std.mem.Allocator,
     io: std.Io,
@@ -12,7 +35,7 @@ pub const Context = struct {
     stdout: std.Io.File = .stdout(),
     stderr: std.Io.File = .stderr(),
     message: ?[]const u8 = null,
-    error_code: []const u8 = "operation_failed",
+    error_code: Code = .operation_failed,
     pub fn fmt(c: *Context, comptime f: []const u8, args: anytype) ![]const u8 {
         return std.fmt.allocPrint(c.a, f, args);
     }
@@ -23,9 +46,18 @@ pub const Context = struct {
         c.message = try c.fmt(f, args);
         return error.Reported;
     }
-    pub fn failCode(c: *Context, code: []const u8, comptime f: []const u8, args: anytype) error{ Reported, OutOfMemory } {
+    pub fn failCode(c: *Context, code: Code, comptime f: []const u8, args: anytype) error{ Reported, OutOfMemory } {
         c.error_code = code;
         return c.fail(f, args);
+    }
+    // Takes back a failure that the caller only warns about: returns what `fail` recorded and
+    // clears it, so a later failure reports its own code. Other errors pass through.
+    pub fn recover(c: *Context, err: anyerror) anyerror![]const u8 {
+        if (err != error.Reported) return err;
+        const message = c.message orelse "";
+        c.message = null;
+        c.error_code = .operation_failed;
+        return message;
     }
     pub fn log(c: *Context, comptime f: []const u8, args: anytype) !void {
         try c.stderr.writeStreamingAll(c.io, try c.fmt(f ++ "\n", args));
@@ -33,14 +65,25 @@ pub const Context = struct {
     pub fn out(c: *Context, s: []const u8) !void {
         try c.stdout.writeStreamingAll(c.io, s);
     }
-    pub fn result(c: *Context, command_name: []const u8, ok: bool, message: []const u8) !void {
-        return c.resultData(command_name, ok, message, null);
+    pub fn result(_: *Context, command_name: []const u8, message: []const u8) !Outcome {
+        return .{ .command = command_name, .message = message };
     }
-    pub fn resultData(c: *Context, command_name: []const u8, ok: bool, message: []const u8, data: anytype) !void {
-        const Failure = struct { code: []const u8, message: []const u8 };
-        if (c.json) {
-            try c.out(try c.fmt("{s}\n", .{try std.json.Stringify.valueAlloc(c.a, .{ .schema_version = 1, .command = command_name, .ok = ok, .message = message, .data = data, .@"error" = if (ok) @as(?Failure, null) else Failure{ .code = c.error_code, .message = message } }, .{})}));
-        } else try c.out(try c.fmt("{s}\n", .{message}));
+    pub fn resultData(c: *Context, command_name: []const u8, message: []const u8, data: anytype) !Outcome {
+        return .{ .command = command_name, .message = message, .data = try std.json.Stringify.valueAlloc(c.a, data, .{}) };
+    }
+    // A result that reports a failure and still carries data, such as machines that did not sync.
+    pub fn failedData(c: *Context, command_name: []const u8, code: Code, message: []const u8, data: anytype) !Outcome {
+        return .{ .command = command_name, .message = message, .data = try std.json.Stringify.valueAlloc(c.a, data, .{}), .failure = code };
+    }
+    pub fn reported(c: *Context, command_name: []const u8, err: anyerror) Outcome {
+        const message = if (err == error.Reported and c.message != null) c.message.? else c.fmt("{s} failed: {s}", .{ command_name, @errorName(err) }) catch "Operation failed.";
+        return .{ .command = command_name, .message = message, .failure = c.error_code, .diagnostic = true };
+    }
+    pub fn print(c: *Context, o: Outcome) !void {
+        if (!c.json) return if (o.diagnostic) c.log("{s}", .{o.message}) else c.out(try c.fmt("{s}\n", .{o.message}));
+        const s = std.json.Stringify.valueAlloc;
+        const failure = if (o.failure) |code| try s(c.a, .{ .code = code, .message = o.message }, .{}) else "null";
+        try c.out(try c.fmt("{{\"schema_version\":1,\"command\":{s},\"ok\":{},\"message\":{s},\"data\":{s},\"error\":{s}}}\n", .{ try s(c.a, o.command, .{}), o.failure == null, try s(c.a, o.message, .{}), o.data, failure }));
     }
     pub fn exists(c: *Context, p: []const u8) bool {
         _ = cwd().statFile(c.io, p, .{}) catch return false;
@@ -51,12 +94,13 @@ pub const Context = struct {
         return st.kind == .sym_link;
     }
     pub fn read(c: *Context, p: []const u8) ![]const u8 {
-        return cwd().readFileAlloc(c.io, p, c.a, .limited(32 * 1024 * 1024));
+        return try c.optional(p) orelse c.fail("Missing {s}.", .{p});
     }
     pub fn optional(c: *Context, p: []const u8) !?[]const u8 {
-        return c.read(p) catch |err| switch (err) {
+        return cwd().readFileAlloc(c.io, p, c.a, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
             error.FileNotFound => null,
-            else => return err,
+            error.OutOfMemory => error.OutOfMemory,
+            else => c.fail("Cannot read {s}: {s}.", .{ p, @errorName(err) }),
         };
     }
     pub fn mkdir(c: *Context, p: []const u8) !void {
@@ -76,9 +120,7 @@ pub const Context = struct {
                 return;
             }
         }
-        var random: [8]u8 = undefined;
-        std.Io.random(c.io, &random);
-        const tmp = try c.fmt("{s}.ec-{x}", .{ p, random });
+        const tmp = try c.tempNear(p);
         defer cwd().deleteFile(c.io, tmp) catch {};
         const file = try cwd().createFile(c.io, tmp, .{ .exclusive = true, .permissions = .fromMode(@intCast(mode)) });
         {
@@ -87,6 +129,12 @@ pub const Context = struct {
             try file.setPermissions(c.io, .fromMode(@intCast(mode)));
         }
         try cwd().rename(tmp, cwd(), p, c.io);
+    }
+    // A unique path beside `p` for staging a write that is then renamed over it.
+    pub fn tempNear(c: *Context, p: []const u8) ![]const u8 {
+        var random: [8]u8 = undefined;
+        std.Io.random(c.io, &random);
+        return c.fmt("{s}.ec-{x}", .{ p, random });
     }
     pub fn copy(c: *Context, from: []const u8, to: []const u8, mode: u32) !void {
         try c.write(to, try c.read(from), mode);
@@ -124,14 +172,8 @@ pub const Context = struct {
         }
     }
     pub fn commandExists(c: *Context, name: []const u8) bool {
-        var it = std.mem.splitScalar(u8, c.env.get("PATH") orelse "", ':');
-        while (it.next()) |p| {
-            if (p.len == 0) continue;
-            const full = c.path(&.{ p, name }) catch return false;
-            const st = cwd().statFile(c.io, full, .{}) catch continue;
-            if (st.kind == .file and st.permissions.toMode() & 0o111 != 0) return true;
-        }
-        return false;
+        _ = c.resolveCommand(name) catch return false;
+        return true;
     }
     pub fn resolveCommand(c: *Context, name: []const u8) ![]const u8 {
         if (std.mem.indexOfScalar(u8, name, '/') != null) return name;
@@ -154,9 +196,13 @@ pub const Context = struct {
     }
     pub fn command(c: *Context, args: []const []const u8, dir: ?[]const u8) !void {
         const r = try c.capture(args, dir, 600);
+        try c.forward(r);
+        if (!success(r.term)) return c.fail("{s} failed. Check the output above.", .{args[0]});
+    }
+    // Shows a captured command's output on stderr, so --json keeps stdout to one result.
+    pub fn forward(c: *Context, r: std.process.RunResult) !void {
         if (r.stdout.len > 0) try c.stderr.writeStreamingAll(c.io, r.stdout);
         if (r.stderr.len > 0) try c.stderr.writeStreamingAll(c.io, r.stderr);
-        if (!success(r.term)) return c.fail("{s} failed. Check the output above.", .{args[0]});
     }
     pub fn object(_: *Context) Value {
         return .{ .object = .empty };
@@ -165,7 +211,14 @@ pub const Context = struct {
         return (try std.json.parseFromSlice(Value, c.a, data, .{ .allocate = .alloc_always })).value;
     }
     pub fn readJson(c: *Context, p: []const u8) !Value {
-        const v = try c.parse(try c.read(p));
+        return c.parseObject(p, try c.read(p));
+    }
+    // `text` is the contents of `p`, which error messages name.
+    pub fn parseObject(c: *Context, p: []const u8, text: []const u8) !Value {
+        const v = c.parse(text) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return c.fail("{s} is not valid JSON.", .{p}),
+        };
         if (v != .object) return c.fail("Expected a JSON object in {s}", .{p});
         return v;
     }
@@ -173,6 +226,40 @@ pub const Context = struct {
         try c.write(p, try c.fmt("{s}\n", .{try std.json.Stringify.valueAlloc(c.a, v, .{ .whitespace = .indent_2 })}), mode);
     }
 };
+pub const Checks = struct {
+    failed: usize = 0,
+    pub fn fail(checks: *Checks, c: *Context, comptime f: []const u8, args: anytype) !void {
+        checks.failed += 1;
+        try c.log("fail: " ++ f, args);
+    }
+    pub fn file(checks: *Checks, c: *Context, p: []const u8) !void {
+        const st = cwd().statFile(c.io, p, .{}) catch return checks.fail(c, "missing {s}", .{p});
+        if (st.kind != .file) try checks.fail(c, "expected a file at {s}", .{p});
+    }
+};
+pub fn sortStrings(items: [][]const u8) void {
+    std.mem.sort([]const u8, items, {}, struct {
+        fn less(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.lessThan(u8, x, y);
+        }
+    }.less);
+}
+pub fn truthy(value: ?[]const u8) bool {
+    const v = value orelse return false;
+    return v.len > 0 and !eql(u8, v, "0") and !eql(u8, v, "false");
+}
+pub fn unixSeconds(io: std.Io) i64 {
+    return std.Io.Clock.Timestamp.now(io, .real).raw.toSeconds();
+}
+pub fn contains(list: []const []const u8, item: []const u8) bool {
+    for (list) |x| if (eql(u8, x, item)) return true;
+    return false;
+}
+pub fn isCommit(s: []const u8) bool {
+    if (s.len != 40) return false;
+    for (s) |ch| if (!std.ascii.isHex(ch)) return false;
+    return true;
+}
 pub fn success(term: std.process.Child.Term) bool {
     return switch (term) {
         .exited => |code| code == 0,

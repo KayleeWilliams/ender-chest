@@ -1,4 +1,21 @@
-"""Run with dbus-run-session in an isolated temporary HOME, never a live session."""
+"""Manual check, not run by CI: an isolated integration test for packages/ec/src/plugins/unlock-wallet.py.
+
+The helper unlocks an existing KDE wallet through KDE's PAM startup protocol. It needs Linux,
+KWallet 6.29 or newer, Python 3, and python-dbus, so CI does not run this test; the kde plugin's
+native tests mock the flow instead. Run it in a separate D-Bus session with temporary home and
+XDG directories, never against a live wallet:
+
+    fixture=$(mktemp -d)
+    mkdir -m 700 "$fixture/home" "$fixture/data" "$fixture/config" "$fixture/runtime"
+    env DESKTOP_WALLET_TEST=isolated \
+      HOME="$fixture/home" XDG_DATA_HOME="$fixture/data" \
+      XDG_CONFIG_HOME="$fixture/config" XDG_RUNTIME_DIR="$fixture/runtime" \
+      dbus-run-session -- python3 packages/ec/test/unlock-wallet.isolated.py
+
+It creates a disposable wallet and credential, then checks that a wrong password leaves the
+wallet unchanged, the correct password restores the saved credential, and repeated unlocks do
+not restart an already-open wallet. Delete the fixture afterwards.
+"""
 import atexit
 import hashlib
 import importlib.util
@@ -14,9 +31,9 @@ sys.dont_write_bytecode = True
 import dbus
 
 if os.environ.get("DESKTOP_WALLET_TEST") != "isolated":
-    raise SystemExit("Use the isolated test command in tools/desktop/README.md.")
+    raise SystemExit("Run this test as its docstring describes, in an isolated session.")
 
-helper = Path(__file__).resolve().parents[2] / "packages/ec/src/plugins/unlock-wallet.py"
+helper = Path(__file__).resolve().parents[1] / "src/plugins/unlock-wallet.py"
 spec = importlib.util.spec_from_file_location("wallet_helper", helper)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

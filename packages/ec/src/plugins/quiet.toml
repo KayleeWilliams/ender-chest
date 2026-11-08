@@ -1,6 +1,5 @@
 name = "quiet"
 description = "Stop stale dev servers and containers before a benchmark."
-run = "ec:quiet"
 default = "stop"
 
 [[commands]]

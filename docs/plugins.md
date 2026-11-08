@@ -1,16 +1,96 @@
 # Plugins
 
-A plugin adds commands to `ec` and can contribute MCP servers and a model provider to Claude Code, Codex, and Grok. Plugins can be written in any language. The plugins that ship with `ec` use the same protocol as yours.
+A plugin adds commands to `ec` and can contribute MCP servers to your agents and a model provider to Claude Code, Codex, and Grok. Enable one with a `[plugins.NAME]` table in `ender-chest.toml`; the keys in that table are its settings. Once a plugin is enabled, `ec NAME --help` lists its commands and settings, and `ec plugin list` shows what is enabled and which settings still have no value. Removing a plugin and syncing removes what it added to agent settings and keeps your other MCP servers and providers.
 
-## Enable a plugin
+## Built-in plugins
 
-List plugins in `ender-chest.toml` at the root of your config repo. Keys other than `source` are the plugin's settings.
+These ship with `ec`. The values below are placeholders; replace them with your own.
+
+### cliproxyapi
+
+Routes Claude Code, Codex, and Grok through a [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) server. `url` is the proxy's origin, without `/v1`.
+
+```toml
+[plugins.cliproxyapi]
+url = "https://proxy.example.test:8317"
+key = { secret = "cliproxyapi" }
+```
+
+On each machine, save a client key the proxy accepts, sync, and check it:
+
+```sh
+ec secret set cliproxyapi
+ec sync --skip-packages
+ec cliproxyapi models
+```
+
+Sync writes the endpoint and key into the agents' settings; open a new agent session afterwards. `ec cliproxyapi run PROGRAM` runs other programs with `OPENAI_BASE_URL` and `OPENAI_API_KEY` set. To replace a key, add the new one on the proxy, run `ec secret set cliproxyapi` and sync on each machine, check `models`, then retire the old key.
+
+#### Run the proxy on a Mac
+
+`ec cliproxyapi restart` restarts a launch agent labelled `io.cliproxyapi` on the proxy's host, and from other machines runs the same command on the host over SSH. Set the host up with that launch agent:
+
+```sh
+brew install cliproxyapi
+cp tools/cliproxyapi/config.yaml.example "$(brew --prefix)/etc/cliproxyapi.conf"
+chmod 600 "$(brew --prefix)/etc/cliproxyapi.conf"
+cp tools/cliproxyapi/io.cliproxyapi.plist ~/Library/LaunchAgents/
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.cliproxyapi.plist
+```
+
+Run these from an Ender Chest source checkout. Before starting it, replace the placeholder in `api-keys` with a new random client key, and log in to your providers following the [CLIProxyAPI docs](https://github.com/router-for-me/CLIProxyAPIDocs/blob/main/docs/en/configuration/basic.md). The plist uses Homebrew's Apple silicon path; on an Intel Mac, change `/opt/homebrew` to `/usr/local`. If `brew services` already runs the proxy, stop it first so the two don't share a port.
+
+The example config listens on `127.0.0.1:8317` with the management panel off. To reach it from your other machines, publish it on your tailnet with `tailscale serve --bg --https=8317 http://127.0.0.1:8317` and use the HTTPS name Tailscale prints as `url`. Don't use Funnel.
+
+### executor
+
+Shares one Executor MCP server with every agent, on every machine. `key` is the server's API key.
 
 ```toml
 [plugins.executor]
 url = "https://mcp.example.test:4312"
 key = { secret = "executor" }
+```
 
+Run `ec secret set executor` on each machine, then sync. `ec executor status` checks the server and key.
+
+### wol and kde
+
+`wol` wakes a machine with Wake-on-LAN and waits until it answers. `kde` unlocks KWallet on a KDE Plasma machine and shuts it down. Enable Wake-on-LAN in the machine's firmware and operating system first.
+
+```toml
+[plugins.wol]
+mac = "00:00:5e:00:53:01"
+broadcast = "192.0.2.255"
+host = "desktop.example.test"
+relay = "user@relay.example.test"
+after_wake = "kde unlock --wait"
+
+[plugins.kde]
+host = "user@desktop.example.test"
+```
+
+```sh
+ec wol wake
+ec wol status
+ec kde shutdown
+```
+
+On the machine's LAN, `ec wol wake` sends the packet directly. Elsewhere it asks `relay` over SSH, so the relay needs `ec`, this config, and access to that LAN. Wallet unlock needs KWallet 6.29+, Python 3, and `python-dbus` on the KDE machine; run `ec kde unlock --setup` on a Mac to save the wallet password in its Keychain.
+
+### quiet
+
+Stops stale dev servers, watchers, headless browsers, and containers before a benchmark. It has no settings.
+
+```toml
+[plugins.quiet]
+```
+
+## Plugin sources
+
+`source` selects where a plugin comes from. Other keys are its settings.
+
+```toml
 [plugins.hello]
 source = "plugins/hello"
 
@@ -18,28 +98,26 @@ source = "plugins/hello"
 source = "someone/ec-backup#v1.2.0"
 ```
 
-`source` selects where the plugin comes from:
-
-| Source | Meaning |
-| --- | --- |
-| omitted | A plugin that ships with `ec`, such as `wol`, `kde`, `cliproxyapi`, `executor`, or `quiet` |
-| `plugins/hello` | A directory in your config repo |
+| Source           | Meaning                                         |
+| ---------------- | ----------------------------------------------- |
+| omitted          | A built-in plugin                               |
+| `plugins/hello`  | A directory in your config repo                 |
 | `owner/repo#ref` | A GitHub repository at a tag, branch, or commit |
 
 `ec sync` clones GitHub plugins into `~/.local/share/ender-chest/plugins` and records each resolved commit in `ender-chest.lock`. Commit that file. Later syncs use the recorded commit. `ec plugin update NAME` moves a plugin to the newest commit for its ref and prints a GitHub compare link from the old commit to the new one.
 
-`ec plugin list` shows each enabled plugin, its source, commit, and commands.
-
 ## Secrets
 
-Write a secret value as a table instead of a string:
+Write a secret setting as a table instead of a string:
 
 ```toml
 key = { secret = "executor" }        # ~/.config/ender-chest/secrets/executor
 token = { env = "BACKUP_TOKEN" }     # an environment variable
 ```
 
-`ec secret set NAME` reads a value from a hidden prompt, or from stdin when piped, and stores it with mode `0600`. Secret files never enter the config repo, and `ec push` refuses them. A plugin receives only the secrets named in its own settings.
+`ec secret set NAME` reads a value from a hidden prompt, or from stdin when piped, and stores it in `~/.config/ender-chest/secrets/NAME`. `ec secret list` prints names only, and `ec secret remove NAME` deletes one. Each machine stores its own secrets; they never travel through Git.
+
+Sync writes the secrets that plugins contribute into agent settings, so those files stay on the machine too. [Credential handling](../SECURITY.md) covers file modes, what each plugin receives, and what `ec push` refuses.
 
 ## Write a plugin
 
@@ -63,7 +141,6 @@ default = "Hello"
 
 [settings.token]
 type = "secret"
-required = true
 description = "Token for the hello service."
 
 [[commands]]
@@ -73,12 +150,19 @@ usage = "ec hello say [--loud]"
 effects = ["Prints one line. Changes nothing."]
 examples = ["ec hello say", "ec hello say --loud --json"]
 options = [{ name = "loud", description = "Use capital letters." }]
+
+[[commands]]
+name = "send"
+description = "Send the greeting to the hello service."
+needs = ["token"]
 ```
+
+A setting's `type` is `string` (the default), `secret`, `url`, `integer`, or `boolean`. A `url` is a string without its trailing slashes, so templates can append a path. `required = true` means every command needs the setting; `needs` lists settings that only some commands need.
 
 `ec hello say --loud` runs `bin/hello say --loud`. Before it starts the plugin, `ec`:
 
 - checks that `say` is a declared command and `--loud` a declared option, and that string options have values;
-- resolves the plugin's settings, applies defaults, and fails if a required setting is missing;
+- resolves the plugin's settings, applies defaults, and fails if a required setting, or one the command `needs`, has no value;
 - prints help from the manifest for `ec hello --help` and `ec hello say --help`, without running the plugin.
 
 The plugin inherits stdin, stdout, and stderr, and `ec` exits with its exit code. These variables describe the call:
@@ -108,7 +192,7 @@ With `--json`, print exactly one result object on stdout in the same shape as co
 
 ## Contribute to agents
 
-A plugin can add MCP servers and one model provider. `ec sync` writes them into Claude Code, Codex, and Grok, and keeps the user's other settings. `{name}` inserts a resolved setting.
+A plugin can add MCP servers and one model provider. `ec sync` writes MCP servers into every agent and the provider into Claude Code, Codex, and Grok, and keeps the user's other settings. [Config](config.md#agent-instructions-and-settings) lists where each agent keeps them. `{name}` inserts a resolved setting.
 
 ```toml
 [[mcp_servers]]
@@ -121,11 +205,13 @@ base_url = "{url}"
 api_key = "{token}"
 ```
 
-A contribution that uses a setting with no value is skipped, with a note that says which setting is missing.
+`base_url` is the server's origin. Claude Code uses it as is; Codex and Grok, which speak the OpenAI API, use it with `/v1` appended.
+
+A contribution that uses a setting with no value is skipped, and sync prints a note that names the plugin.
 
 ## Hooks
 
-`[hooks]` names commands that `ec` runs at fixed points. Each runs with the same environment as a command.
+`[hooks]` names commands that `ec` runs at fixed points. Each runs with the same environment as a command, except `EC_JSON`, and its output goes to stderr. A hook is skipped while a required setting has no value.
 
 ```toml
 [hooks]

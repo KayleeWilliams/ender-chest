@@ -1,122 +1,63 @@
-![Ender Chest inventory holding the logos of Codex, Claude, Meta Muse, Grok, Gemini, Cursor, OpenCode, Amp, Tembo, T3 Code, Orca, skills.sh, MCP, Executor, CLIProxyAPI, Tailscale, GitHub, Git, Homebrew, Zed, macOS, and Linux](https://raw.githubusercontent.com/KayleeWilliams/ender-chest/main/docs/assets/ender-chest.png)
+![Ender Chest](https://raw.githubusercontent.com/KayleeWilliams/ender-chest/main/docs/assets/ender-chest.png)
 
-# Machine config starter
+# Machine config
 
-This is a complete config checkout for Ender Chest. It installs shared agent instructions, a review skill, shell and Git defaults, and starter preferences for Claude Code, Codex, and Grok.
+A config checkout for [Ender Chest](https://github.com/KayleeWilliams/ender-chest). `ec sync` applies it to each of your machines: your agent instructions and settings for Claude Code, Codex, Grok, Cursor, Meta Muse Code, Gemini CLI, and OpenCode, a code review skill, and your Git config.
 
-## Start here
+## Start
 
-On GitHub, choose **Use this template** on [ender-chest-template](https://github.com/KayleeWilliams/ender-chest-template), create a private repository, and clone it:
-
-```sh
-git clone https://github.com/YOUR-NAME/my-machine-config.git ~/my-machine-config
-cd ~/my-machine-config
-```
-
-Or copy `examples/config` out of the Ender Chest source checkout and run `git init` in the copy.
-
-Edit [agents/shared/AGENTS.md](agents/shared/AGENTS.md) to describe how you want agents to work across your projects. Review the agent preferences below, then apply the config:
+Create your own copy with **Use this template** on [ender-chest-template](https://github.com/KayleeWilliams/ender-chest-template), and make it private. [Install `ec`](https://github.com/KayleeWilliams/ender-chest/blob/main/README.md#install), then clone your copy:
 
 ```sh
-ec sync --repo "$PWD" --skip-packages
-ec verify
+git clone https://github.com/YOUR-NAME/my-machine-config.git ~/my-machine-config && cd ~/my-machine-config
 ```
 
-[ender-chest.toml](ender-chest.toml) lists what sync applies: home files, Brewfiles, setup steps, and plugins. Sync replaces the listed shell, Git, and SSH files and the shared instruction files. The first time it replaces a file that differs, it keeps your old copy under `~/.config/ender-chest/backup/`. `--skip-packages` skips the Brewfiles and setup steps. It still writes config and installs skills.
+Edit these files:
 
-The initial sync needs no secrets, enables no plugins, and downloads no skills. Sign in through each agent's own login flow to use it directly. Add a Git remote when you want other machines to use this checkout; keep it private if you add personal hostnames or work details.
+- [agents/shared/AGENTS.md](agents/shared/AGENTS.md): how you want agents to work in every project.
+- [git/gitconfig.local.example](git/gitconfig.local.example): your Git identity, copied once to `~/.gitconfig.local` on each machine.
+- [DEVICES.md](DEVICES.md): your machines.
+- [Brewfile](Brewfile): the packages each machine installs.
 
-## Agent instructions
-
-[agents/shared/AGENTS.md](agents/shared/AGENTS.md) contains working rules for writing, implementation, tests, and Git. Sync copies the same text to each agent:
-
-| Source                    | Installed on this device |
-| ------------------------- | ------------------------ |
-| `agents/shared/AGENTS.md` | `~/.claude/CLAUDE.md`    |
-| `agents/shared/AGENTS.md` | `~/.codex/AGENTS.md`     |
-| `agents/shared/AGENTS.md` | `~/.grok/AGENTS.md`      |
-
-Edit the source in this checkout. Changes to installed instruction files are overwritten on the next sync, and `ec push` does not collect them.
-
-Keep project paths, architecture, and build commands in each project's own `AGENTS.md`. The separate `examples/project` directory in the Ender Chest source repo shows one for a pnpm workspace, including a `CLAUDE.md` that imports it.
-
-This directory's [AGENTS.md](AGENTS.md) gives an agent instructions for editing the config checkout itself. It is not installed as your global agent instructions.
-
-## Agent preferences
-
-| Source | Installed path | Sync behavior |
-| --- | --- | --- |
-| [Claude settings](agents/claude/settings.json) | `~/.claude/settings.json` | Merges portable settings on every sync. Matching top-level keys are replaced; `env` merges by key, and `hooks` groups join the ones already there. |
-| [Codex config](agents/codex/config.toml) | `~/.codex/config.toml` | Seeds a missing file, then preserves existing preferences. |
-| [Grok config](agents/grok/config.toml) | `~/.grok/config.toml` | Seeds a missing file, then preserves existing preferences. |
-
-Claude starts in `acceptEdits` mode and omits generated commit and PR attribution. Codex starts with workspace write access, on-request approvals, cached web search, and terminal notifications. Grok enables CLI updates and uses a 120-column thoughts display. Choose models through each agent's own settings; the templates do not assume a subscription or available model.
-
-If you change a Codex or Grok template after the first sync, make the same preference edit in that device's installed config. Do not delete an existing config to reapply a template; it can contain authentication and project settings. Keep the source templates portable, and leave account sessions, tokens, trusted project paths, and credentials in the installed files.
-
-Enabled plugins can add an MCP server or a model provider to these settings, as described below. Generated agent settings stay on-device, and `ec push` does not export them into these templates.
-
-See the [Codex configuration reference](https://developers.openai.com/codex/config-reference) and [Claude settings reference](https://code.claude.com/docs/en/settings-reference) for other supported options.
-
-## Skills
-
-The bundled [review-changes](skills/review-changes/SKILL.md) skill walks through a local diff review. Ask an agent to use `review-changes` to review your working tree. Edit its source here to change the review process.
-
-Sync copies local skills into `~/.agents/skills/<name>` and creates links from the Claude, Codex, and Grok skill directories. Local skills apply to both the `mac` and `cloud` profiles. Add your own folder with a `SKILL.md`; it does not need an entry in the manifest.
-
-[skills/manifest.json](skills/manifest.json) is empty because external skills are opt-in. After choosing a repository you trust, add an entry like this:
-
-```json
-{
-  "version": 1,
-  "skills": [
-    {
-      "name": "team-review",
-      "source": "your-org/agent-skills#v1.0.0",
-      "skill": "review",
-      "profiles": ["mac", "cloud"]
-    }
-  ]
-}
-```
-
-Replace the example source with a real GitHub repository and branch or tag. `skill` identifies the skill in that repository; `name` is its installed directory. Omit `profiles` to install it on every profile. Use `ec sync --update-skills` to refresh external skills. Removing an entry stops managing it but does not uninstall it; add `"remove": [{ "name": "team-review" }]` to the manifest to remove its installed copies on the next sync.
-
-## Plugins
-
-The end of [ender-chest.toml](ender-chest.toml) has a commented example for each plugin that ships with `ec`. Uncomment one, replace its example values, and save any secret it names on each device:
+Sync replaces `~/.gitconfig` with [one](home/.gitconfig) that includes `~/.gitconfig.local`. If you already have a `~/.gitconfig` and no `~/.gitconfig.local`, move yours aside first so your identity and credential helpers keep working:
 
 ```sh
-ec secret set cliproxyapi
+mv ~/.gitconfig ~/.gitconfig.local
+```
+
+Then apply the checkout:
+
+```sh
 ec sync --skip-packages
-ec cliproxyapi models
 ```
 
-`cliproxyapi` routes Claude Code, Codex, and Grok through a CLIProxyAPI server, and `executor` gives them a shared Executor MCP server. `wol` and `kde` wake, unlock, and shut down a desktop. `quiet` stops stale dev servers before a benchmark. Run `ec NAME --help` for a plugin's commands and settings. Removing a plugin and syncing removes what it added to agent settings.
+Sync sets up only the agents installed on each machine, so the [agents](agents) folders for agents you don't use do nothing. Sync [keeps a backup](https://github.com/KayleeWilliams/ender-chest/blob/main/docs/config.md#sync-and-push) of each file it replaces. Drop `--skip-packages` to install the Brewfile too; on a Mac without Homebrew, sync installs Homebrew first, which asks for your password.
 
-Secrets stay in `~/.config/ender-chest/secrets/` on each device, never in this checkout. The Ender Chest setup guide covers running a proxy host and connecting it through Tailscale.
+Commit and push your edits. On each other machine, install `ec`, clone, move `~/.gitconfig` aside as above, and run the same `ec sync`.
 
-## Shell, Git, and device overrides
+## What's here
 
-Each entry in the `files` list of [ender-chest.toml](ender-chest.toml) maps `home/<path>` to the same path under your home directory. A file under `home/` is installed only when it is listed there. `profiles = ["mac"]` limits the macOS shell and Zed files to the `mac` profile.
+| Path | Use |
+| --- | --- |
+| [ender-chest.toml](ender-chest.toml) | What sync applies: files, packages, setup steps, and plugins |
+| [agents/shared/AGENTS.md](agents/shared/AGENTS.md) | Your instructions for every agent |
+| [agents/claude/settings.json](agents/claude/settings.json) | Claude Code settings, merged into `~/.claude/settings.json` on every sync |
+| [agents/codex/config.toml](agents/codex/config.toml), [agents/grok/config.toml](agents/grok/config.toml) | Codex and Grok settings, copied only to a machine that has none |
+| [agents/cursor/cli-config.json](agents/cursor/cli-config.json) | Cursor CLI settings, merged on every sync |
+| [agents/muse/settings.json](agents/muse/settings.json) | Meta Muse Code settings, merged on every sync |
+| [agents/gemini/settings.json](agents/gemini/settings.json) | Gemini CLI settings, merged on every sync |
+| [agents/opencode/opencode.json](agents/opencode/opencode.json) | OpenCode settings, merged on every sync |
+| [skills/review-changes](skills/review-changes/SKILL.md) | A code review skill for every agent |
+| [home/.gitconfig](home/.gitconfig) | Your `~/.gitconfig` |
+| [AGENTS.md](AGENTS.md) | Tells agents how to edit this checkout. Sync doesn't install it |
 
-The `once` entries create device-local files from these templates:
+To manage a file you already have, such as `~/.zshrc`, see [sync and push](https://github.com/KayleeWilliams/ender-chest/blob/main/docs/config.md#sync-and-push).
 
-| Source template | Device-local file | Use |
-| --- | --- | --- |
-| [git/gitconfig.local.example](git/gitconfig.local.example) | `~/.gitconfig.local` | Your Git identity and optional work-directory include. |
-| [git/identity.work.example](git/identity.work.example) | `~/.config/git/identity.work` | Your work Git identity. |
-| [shell/zshrc.local.example](shell/zshrc.local.example) | `~/.zshrc.local` | Private aliases and machine-specific paths. |
-| [tools/ssh/config.local.example](tools/ssh/config.local.example) | `~/.ssh/config.local` | Private hosts, usernames, and SSH key paths. |
+## More
 
-Sync creates a missing `once` file, including an empty `~/.zprofile.local`, and never overwrites one. Edit the installed files to enable their commented examples. `ec push` does not capture them.
+- [Config reference](https://github.com/KayleeWilliams/ender-chest/blob/main/docs/config.md): every `ender-chest.toml` key, where sync installs each file, skills, and recipes for shell setup and work identities.
+- [Plugins](https://github.com/KayleeWilliams/ender-chest/blob/main/docs/plugins.md): shared MCP servers, model proxies, and the other built-in plugins, and how secrets are stored.
+- [Devices](https://github.com/KayleeWilliams/ender-chest/blob/main/docs/devices.md): checking and syncing every machine over SSH.
+- [Project instructions](https://github.com/KayleeWilliams/ender-chest/tree/main/examples/project): an `AGENTS.md` for a single codebase.
 
-Review [tools/Brewfile](tools/Brewfile) before running sync without `--skip-packages`. The `mac` profile also installs [tools/Brewfile.mac](tools/Brewfile.mac). The setup steps install Oh My Zsh and three zsh-users plugins, then the Node version in [tools/node-version](tools/node-version) through fnm when fnm is installed. A step whose `creates` path exists is skipped.
-
-## Devices
-
-[DEVICES.md](DEVICES.md) lists your machines, their Tailscale names, SSH users, and roles. Replace the example rows with your own. The shared agent instructions tell agents to read it before they work on another machine. It also covers first-time SSH access and GitHub credentials for syncs that run over SSH. Keep the repository private once this file lists real hostnames.
-
-## Save changes
-
-Edit shared instructions, agent templates, and skills in this checkout. Use `ec push --dry-run` to collect changes to listed home files and skills without committing. This still modifies the checkout, so review `git diff` afterwards. `ec push` commits and uploads changes when a remote is configured. Other machines pick them up when you run `ec sync` there.
+This template is dedicated to the public domain under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). Copy and change it without credit.

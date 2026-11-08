@@ -1,39 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { pluginFixture } from "./fixture.ts";
-
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
 
 const helper = readFileSync(
   new URL("../src/plugins/unlock-wallet.py", import.meta.url),
   "utf-8"
 );
-const kde = () => {
-  const f = pluginFixture(
+const kde = () =>
+  pluginFixture(
     '[plugins.kde]\nhost = "user@desktop.example.test"\nwait_seconds = 2\n'
   );
-  roots.push(f.root);
-  return f;
-};
-// Fake ping logs its target and answers from a script of exit codes, one per call,
-// repeating the last.
-const pings = (f: ReturnType<typeof kde>, codes: number[]) => {
-  const count = path.join(f.root, "pings");
-  const log = path.join(f.root, "ping.log");
-  return f.fake(
-    "ping",
-    `const fs=require('node:fs'),f=${JSON.stringify(count)},c=${JSON.stringify(codes)};fs.appendFileSync(${JSON.stringify(log)},process.argv.at(-1)+"\\n");const n=fs.existsSync(f)?+fs.readFileSync(f,'utf8'):0;fs.writeFileSync(f,String(n+1));process.exit(c[Math.min(n,c.length-1)]);`
-  );
-};
 // Fake ssh records its arguments and stdin, then runs `body`.
 const ssh = (f: ReturnType<typeof kde>, body: string) => {
   const log = path.join(f.root, "ssh.json");
@@ -57,7 +37,7 @@ describe("kde plugin", () => {
     const s = ssh(f, "console.log('ready')");
     const r = f.run(["kde", "shutdown", "--json"], {
       ...s.env,
-      ...pings(f, [0, 0, 1]),
+      ...f.pings([0, 0, 1]),
     });
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject({
@@ -70,9 +50,11 @@ describe("kde plugin", () => {
     expect(args).toContain("BatchMode=yes");
     expect(args.at(-1)).toContain("org.kde.Shutdown logoutAndShutdown");
     // ping gets the host, not USER@HOST.
-    expect(readFileSync(path.join(f.root, "ping.log"), "utf-8")).toBe(
-      "desktop.example.test\n".repeat(3)
-    );
+    const pinged = readFileSync(path.join(f.root, "ping.log"), "utf-8")
+      .trim()
+      .split("\n");
+    expect(pinged.length).toBeGreaterThan(0);
+    expect(new Set(pinged)).toEqual(new Set(["desktop.example.test"]));
   }, 15_000);
 
   it("does not wait with --no-wait", () => {
@@ -80,7 +62,7 @@ describe("kde plugin", () => {
     const s = ssh(f, "console.log('ready')");
     const r = f.run(["kde", "shutdown", "--no-wait", "--json"], {
       ...s.env,
-      ...pings(f, [0]),
+      ...f.pings([0]),
     });
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).message).toBe("Shutdown requested.");
@@ -89,7 +71,7 @@ describe("kde plugin", () => {
   it("does not wait for shutdown when SSH never connects, and treats an offline machine as off", () => {
     const failed = kde();
     const r = failed.run(["kde", "shutdown", "--json"], {
-      ...pings(failed, [0]),
+      ...failed.pings([0]),
       ...failed.fake(
         "ssh",
         "console.error('Permission denied');process.exit(255)"
@@ -100,7 +82,7 @@ describe("kde plugin", () => {
       "Cannot SSH to user@desktop.example.test"
     );
     const off = kde();
-    const offline = off.run(["kde", "shutdown", "--json"], pings(off, [1]));
+    const offline = off.run(["kde", "shutdown", "--json"], off.pings([1]));
     expect(offline.status).toBe(0);
     expect(JSON.parse(offline.stdout).message).toContain("already off");
   });

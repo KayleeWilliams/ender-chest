@@ -1,177 +1,56 @@
 import { execFile, spawnSync } from "node:child_process";
-import { once } from "node:events";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
-import { createServer } from "node:http";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { parse as toml } from "smol-toml";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   ec,
   filePermissions,
+  listen,
   pluginFixture,
   write,
-  writeSourceRepo,
 } from "./fixture.ts";
 
 const exec = promisify(execFile);
-const roots: string[] = [];
-const servers: Server[] = [];
-afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map((server) => server[Symbol.asyncDispose]())
-  );
-  for (const root of roots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
 
 const key = "fake-executor-key-for-tests-xxxxxxxxxx";
 const settings = (url: string) =>
   `[plugins.executor]\nurl = ${JSON.stringify(url)}\nkey = { secret = "executor" }\npackage = "executor@beta"\n`;
 const executor = (url: string) => {
   const f = pluginFixture(settings(url));
-  roots.push(f.root);
   f.secret("executor", key);
   return f;
-};
-const listen = async (
-  handler: Parameters<typeof createServer>[1]
-): Promise<string> => {
-  const server = createServer(handler);
-  servers.push(server);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  // SAFETY: The server is listening on a TCP port, so address() returns AddressInfo.
-  const address = server.address() as AddressInfo;
-  return `http://127.0.0.1:${address.port}`;
 };
 
 // Fake commands record their arguments. The fake executor prints its environment for
 // serve and a link for pair. `dns` is this machine's Tailscale name.
 const fakes = (url: string, dns = "other.example.test.") => {
   const f = executor(url);
-  const bin = path.join(f.home, "bin");
-  const calls = path.join(f.root, "calls.log");
-  const record = (name: string, body = "exit 0") => {
-    write(
-      f.home,
-      `bin/${name}`,
-      `#!/bin/sh\necho "${name} $*" >> "${calls}"\n${body}\n`
-    );
-    chmodSync(path.join(bin, name), 0o755);
-  };
-  for (const name of ["launchctl", "npm"]) {
-    record(name);
-  }
-  record("ssh", 'echo "https://pair.example.test/link"');
-  record(
+  f.record("launchctl");
+  f.record("npm");
+  f.record("ssh", "console.log('https://pair.example.test/link')");
+  f.record(
     "tailscale",
-    `[ "$1" = status ] && echo '{"Self":{"DNSName":"${dns}"}}'; exit 0`
+    `if(a[0]==='status')console.log(JSON.stringify({Self:{DNSName:${JSON.stringify(dns)}}}))`
   );
-  record(
+  const { PATH } = f.record(
     "executor",
-    '[ "$1" = serve ] && env | grep -E "^(EXECUTOR_|EC_PLUGIN_SETTINGS=)" | sort; [ "$1" = pair ] && echo "https://pair.example.test/local"; [ "$1" = --version ] && echo "executor v2.0.0-beta.14"; exit 0'
+    "if(a[0]==='serve')for(const k of Object.keys(process.env).sort())if(/^EXECUTOR_|^EC_PLUGIN_SETTINGS$/u.test(k))console.log(k+'='+process.env[k]);if(a[0]==='pair')console.log('https://pair.example.test/local');if(a[0]==='--version')console.log('executor v2.0.0-beta.14')"
   );
   write(f.home, ".local/bin/ec", "#!/bin/sh\n");
   const env = {
     ...f.env,
     EXECUTOR_KEY_STORAGE: "os",
     EXECUTOR_RESTART_TIMEOUT: "2",
-    PATH: `${bin}:/usr/bin:/bin`,
+    PATH,
   };
   const run = (args: string[]) => exec(ec, ["executor", ...args], { env });
-  const takeCalls = () => {
-    if (!existsSync(calls)) {
-      return "";
-    }
-    const text = readFileSync(calls, "utf-8");
-    rmSync(calls);
-    return text;
-  };
-  return { env, home: f.home, run, takeCalls };
+  return { env, home: f.home, run, takeCalls: f.takeCalls };
 };
 
 describe("executor plugin", () => {
-  it("replaces stale MCP entries in every agent with the shared endpoint and key", () => {
-    const f = executor("https://mcp.example.test:4312");
-    writeSourceRepo(f.repo, settings("https://mcp.example.test:4312"));
-    write(
-      f.home,
-      ".claude.json",
-      JSON.stringify({
-        mcpServers: {
-          executor: {
-            timeout: 5,
-            type: "http",
-            url: "https://old.example.test/mcp",
-          },
-        },
-      })
-    );
-    write(
-      f.home,
-      ".codex/config.toml",
-      '[mcp_servers.executor]\nurl = "https://old.example.test/mcp"\nbearer_token_env_var = "OLD"\nstartup_timeout_sec = 30\n'
-    );
-    write(
-      f.home,
-      ".grok/config.toml",
-      '[mcp_servers.executor]\nurl = "https://old.example.test/mcp"\nenabled = true\nbearer_token_file = "~/old"\n'
-    );
-    const sync = () => {
-      const r = f.run(["sync", "--skip-packages", "--profile", "mac"]);
-      expect(r.status, r.stdout + r.stderr).toBe(0);
-    };
-    sync();
-    const url = "https://mcp.example.test:4312/mcp";
-    const authorization = `Bearer ${key}`;
-    const claudeFile = path.join(f.home, ".claude.json");
-    expect(
-      JSON.parse(readFileSync(claudeFile, "utf-8")).mcpServers.executor
-    ).toEqual({
-      headers: { Authorization: authorization },
-      timeout: 5,
-      type: "http",
-      url,
-    });
-    const codex = toml(
-      readFileSync(path.join(f.home, ".codex/config.toml"), "utf-8")
-    );
-    expect(codex.mcp_servers).toEqual({
-      executor: {
-        http_headers: { Authorization: authorization },
-        startup_timeout_sec: 30,
-        url,
-      },
-    });
-    const grok = toml(
-      readFileSync(path.join(f.home, ".grok/config.toml"), "utf-8")
-    );
-    expect(grok.mcp_servers).toEqual({
-      executor: {
-        enabled: true,
-        headers: { Authorization: authorization },
-        url,
-      },
-    });
-    // An unchanged entry leaves the file alone, since Claude Code rewrites it while running.
-    const before = statSync(claudeFile).mtimeMs;
-    sync();
-    expect(statSync(claudeFile).mtimeMs).toBe(before);
-  });
-
   it("prints the MCP endpoint and checks the key", async () => {
     const requests: { url?: string; authorization?: string }[] = [];
     let status = 200;
@@ -204,22 +83,22 @@ describe("executor plugin", () => {
     expect(JSON.parse(result.stdout).error.code).toBe("unreachable");
   });
 
-  // ec reports a missing secret before it starts a plugin, so drive the plugin directly.
   it("asks for the key only for commands that need it", () => {
-    const f = executor("https://mcp.example.test:4312");
-    const env = {
-      EC_JSON: "1",
-      EC_PLUGIN_SETTINGS: JSON.stringify({
-        url: "https://mcp.example.test:4312",
-      }),
-    };
-    expect(f.run(["__plugin", "executor", "url"], env).status).toBe(0);
-    const status = f.run(["__plugin", "executor", "status"], env);
+    const f = pluginFixture(settings("https://mcp.example.test:4312"));
+    expect(f.run(["executor", "url", "--json"]).status).toBe(0);
+    const status = f.run(["executor", "status", "--json"]);
     expect(status.status).toBe(1);
     const result = JSON.parse(status.stdout);
     expect(result.error.code).toBe("interaction_required");
     expect(result.message).toContain('key = { secret = "executor" }');
     expect(result.message).toContain("ec secret set executor");
+    // url never needs the key, but still rejects a saved one that cannot work.
+    f.secret("executor", "too-short");
+    const url = f.run(["executor", "url"]);
+    expect(url.status).toBe(1);
+    expect(url.stderr).toContain("Invalid Executor key.");
+    f.secret("executor", key);
+    expect(f.run(["executor", "url"]).status).toBe(0);
   });
 
   it("runs restart, update, and pair on the host over SSH from other machines", async () => {
@@ -227,8 +106,8 @@ describe("executor plugin", () => {
     const { run, takeCalls } = fakes(url);
     const paired = await run(["pair"]);
     expect(paired.stdout.trim()).toBe("https://pair.example.test/link");
-    expect(takeCalls()).toContain(
-      'ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 127.0.0.1 "$HOME/.local/bin/ec" executor pair\n'
+    expect(takeCalls()).toMatch(
+      /^ssh .*BatchMode=yes.* 127\.0\.0\.1 "\$HOME\/\.local\/bin\/ec" executor pair$/mu
     );
     const updated = await run(["update"]);
     expect(updated.stdout).toContain(`Executor answers at ${url}.`);
@@ -262,8 +141,8 @@ describe("executor plugin", () => {
       );
       expect(calls).toContain(`launchctl bootstrap ${domain} ${plistFile}\n`);
       const plist = readFileSync(plistFile, "utf-8");
-      expect(plist).toContain(
-        `<string>${home}/.local/bin/ec</string>\n    <string>executor</string>\n    <string>serve</string>`
+      expect(plist.replaceAll(/\s+/gu, "")).toContain(
+        `<string>${home}/.local/bin/ec</string><string>executor</string><string>serve</string>`
       );
       expect(plist).not.toContain(key);
       const keyFile = path.join(home, ".config/executor/encryption-key");
@@ -301,7 +180,7 @@ describe("executor plugin", () => {
     write(home, ".config/executor/encryption-key", `${"ab".repeat(32)}\n`);
     const result = spawnSync(ec, ["executor", "serve"], {
       encoding: "utf-8",
-      env,
+      env: { ...env, EXECUTOR_RESTART_TIMEOUT: undefined },
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toEqual([
@@ -310,7 +189,6 @@ describe("executor plugin", () => {
       `EXECUTOR_ENCRYPTION_KEY=${"ab".repeat(32)}`,
       "EXECUTOR_NO_UPDATE_CHECK=1",
       "EXECUTOR_PORT=4312",
-      "EXECUTOR_RESTART_TIMEOUT=2",
     ]);
   });
 });

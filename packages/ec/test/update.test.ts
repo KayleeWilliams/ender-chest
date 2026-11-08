@@ -18,6 +18,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   cliRoot,
   gitInit,
+  hostTarget,
   workspaceRoot,
   write,
   writeSourceRepo,
@@ -43,18 +44,37 @@ afterEach(() => {
   }
 });
 
-const assetKey = (): string => {
-  const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
-  return `${arch}-${process.platform === "darwin" ? "macos" : "linux"}`;
-};
+// A stand-in for GitHub's API behind curl: /releases/latest serves github/latest.json, and
+// https://api.github.com/assets/NAME serves github/NAME. Anything else is a 404. ec sends its
+// curl config on stdin. Each request is logged with its arguments and that config.
+const fakeCurl = (
+  github: string,
+  log: string
+) => `const fs = require("node:fs");
+const args = process.argv.slice(2);
+const config = fs.readFileSync(0, "utf-8");
+const url = args.at(-1);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ url, args, config }) + "\\n");
+const file = url.endsWith("/releases/latest") ? "latest.json" : decodeURIComponent(url.split("/").at(-1));
+const source = ${JSON.stringify(github)} + "/" + file;
+if (!fs.existsSync(source)) process.exit(22);
+process.stdout.write(fs.readFileSync(source));`;
+
+// A release binary that prints its version for the post-download check and otherwise leaves
+// a marker, so a test can tell it ran.
+const binary = (version: string, runs = true) =>
+  `#!/bin/sh\nif [ "\${1-}" = --version ]; then ${runs ? `echo "ec ${version} (abcdef0)"` : "exit 1"}; exit; fi\necho "$*" > "$HOME/ran-${version}"\n`;
 
 const setup = () => {
   const root = mkdtempSync(path.join(tmpdir(), "ec-update-"));
   roots.push(root);
   const home = path.join(root, "home");
   const bin = path.join(root, "bin");
+  const github = path.join(root, "github");
+  const log = path.join(root, "requests.jsonl");
   mkdirSync(home);
   mkdirSync(bin);
+  mkdirSync(github);
   // Each test runs its own copy, so ec update replaces that copy.
   const exe = path.join(bin, "ec");
   copyFileSync(released, exe);
@@ -68,6 +88,7 @@ const setup = () => {
     chmodSync(file, 0o755);
   };
   fake("gh", "process.exit(1);");
+  fake("curl", fakeCurl(github, log));
   const env = {
     CI: "",
     EC_NO_UPDATE: "",
@@ -85,17 +106,12 @@ const setup = () => {
       env: { ...env, ...extra },
       timeout: 15_000,
     });
-  // A release whose binary prints its version for the post-download check and otherwise
-  // leaves a marker, so a test can tell it ran.
+  // A local release for EC_RELEASE_MANIFEST.
   const release = (
     version: string,
     { runs = true, sha256 }: { runs?: boolean; sha256?: string } = {}
   ) => {
-    const asset = write(
-      root,
-      `release-${version}/ec`,
-      `#!/bin/sh\nif [ "\${1-}" = --version ]; then ${runs ? `echo "ec ${version} (abcdef0)"` : "exit 1"}; exit; fi\necho "$*" > "$HOME/ran-${version}"\n`
-    );
+    const asset = write(root, `release-${version}/ec`, binary(version, runs));
     chmodSync(asset, 0o755);
     const bytes = readFileSync(asset);
     const manifest = write(
@@ -103,8 +119,8 @@ const setup = () => {
       `release-${version}/manifest.json`,
       JSON.stringify({
         assets: {
-          [assetKey()]: {
-            name: `ec-${assetKey()}`,
+          [hostTarget()]: {
+            name: `ec-${hostTarget()}`,
             path: asset,
             sha256: sha256 ?? createHash("sha256").update(bytes).digest("hex"),
           },
@@ -115,8 +131,45 @@ const setup = () => {
     );
     return { bytes, manifest };
   };
-  const state = path.join(home, ".config/ender-chest/update-check.json");
-  return { bin, env, exe, fake, home, release, root, run, state };
+  // Publishes a release on the fake GitHub, with its manifest and this machine's binary.
+  const publish = (version: string) => {
+    const bytes = binary(version);
+    const name = `ec-${hostTarget()}`;
+    write(github, name, bytes);
+    write(
+      github,
+      "manifest.json",
+      JSON.stringify({
+        assets: {
+          [hostTarget()]: {
+            name,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+          },
+        },
+        source_hash: "b".repeat(64),
+        version,
+      })
+    );
+    write(
+      github,
+      "latest.json",
+      JSON.stringify({
+        assets: ["manifest.json", name].map((n) => ({
+          name: n,
+          url: `https://api.github.com/assets/${n}`,
+        })),
+        tag_name: `v${version}`,
+      })
+    );
+  };
+  const requests = (): { url: string; args: string[]; config: string }[] =>
+    existsSync(log)
+      ? readFileSync(log, "utf-8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : [];
+  return { bin, env, exe, home, publish, release, requests, root, run };
 };
 
 type Setup = ReturnType<typeof setup>;
@@ -148,16 +201,6 @@ const tty = (f: Setup, args: string[], extra: Record<string, string> = {}) => {
 };
 
 const notice = "Update available 0.0.5 → 0.0.9 · Run ec update";
-const seed = (f: Setup, checkedAt: number, latest = "0.0.9") =>
-  write(
-    f.home,
-    ".config/ender-chest/update-check.json",
-    JSON.stringify({
-      checked_at: checkedAt,
-      latest,
-      notified_at: 0,
-    })
-  );
 
 describe("ec update", () => {
   it("reports a newer release without installing it", () => {
@@ -176,7 +219,6 @@ describe("ec update", () => {
       updated: false,
     });
     expect(readFileSync(f.exe)).toEqual(before);
-    expect(JSON.parse(readFileSync(f.state, "utf-8")).latest).toBe("0.0.9");
   });
 
   it.each(["0.0.5", "0.0.4"])(
@@ -227,7 +269,7 @@ describe("ec update", () => {
   });
 });
 
-describe("sync in a config repo without ec's sources", () => {
+describe("sync in a config repo", () => {
   it("installs a newer release and resumes with it", () => {
     const f = setup();
     const repo = configRepo(f);
@@ -237,9 +279,12 @@ describe("sync in a config repo without ec's sources", () => {
     });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stderr).toContain("Updating ec 0.0.5 to 0.0.9");
-    expect(readFileSync(path.join(f.home, "ran-0.0.9"), "utf-8")).toBe(
-      `sync --repo ${repo} --skip-packages\n`
-    );
+    const args = readFileSync(path.join(f.home, "ran-0.0.9"), "utf-8")
+      .trim()
+      .split(" ");
+    expect(args[0]).toBe("sync");
+    expect(args[args.indexOf("--repo") + 1]).toBe(repo);
+    expect(args).toContain("--skip-packages");
   });
 
   it("never installs an older release", () => {
@@ -257,52 +302,61 @@ describe("sync in a config repo without ec's sources", () => {
     );
   });
 
+  it("finishes with the running ec when the new release does not run", () => {
+    const f = setup();
+    const repo = configRepo(f);
+    const r = f.run(["sync", "--skip-packages", "--json"], {
+      EC_RELEASE_MANIFEST: f.release("0.0.9", { runs: false }).manifest,
+      EC_REPO: repo,
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stderr).toContain("did not run on this machine");
+    expect(existsSync(path.join(f.home, "ran-0.0.9"))).toBe(false);
+  });
+
   it("downloads a public release from GitHub without credentials", () => {
     const f = setup();
     const repo = configRepo(f);
-    const next = f.release("0.0.9");
-    const manifest = JSON.parse(readFileSync(next.manifest, "utf-8"));
-    manifest.assets[assetKey()].path = undefined;
-    write(f.root, "github/manifest.json", JSON.stringify(manifest));
-    write(f.root, "github/binary", next.bytes.toString());
-    write(
-      f.root,
-      "github/release.json",
-      JSON.stringify({
-        assets: [
-          { name: "manifest.json", url: "https://api.github.com/assets/1" },
-          { name: `ec-${assetKey()}`, url: "https://api.github.com/assets/2" },
-        ],
-        tag_name: "v0.0.9",
-      })
-    );
-    f.fake(
-      "curl",
-      `const fs = require("node:fs");
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.HOME + "/requests", fs.readFileSync(args[args.indexOf("--config") + 1], "utf-8"));
-const url = args.at(-1);
-const file = url.endsWith("/latest") ? "release.json" : url.endsWith("/1") ? "manifest.json" : "binary";
-fs.copyFileSync(${JSON.stringify(path.join(f.root, "github"))} + "/" + file, args[args.indexOf("-o") + 1]);`
-    );
+    f.publish("0.0.9");
     const r = f.run(["sync", "--skip-packages"], { EC_REPO: repo });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(existsSync(path.join(f.home, "ran-0.0.9"))).toBe(true);
-    const requests = readFileSync(path.join(f.home, "requests"), "utf-8");
-    expect(requests).toContain("Accept: application/octet-stream");
-    expect(requests).not.toContain("Authorization");
+    expect(f.requests().some((q) => q.config.includes("Authorization"))).toBe(
+      false
+    );
+  });
+
+  it("sends a GitHub token to curl on stdin, never in its arguments", () => {
+    const f = setup();
+    f.publish("0.0.9");
+    const token = "fixture-gh-token";
+    const r = f.run(["update", "--check"], { GH_TOKEN: token });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const requests = f.requests();
+    expect(requests.length).toBeGreaterThan(0);
+    for (const q of requests) {
+      expect(q.config).toContain(`Authorization: Bearer ${token}`);
+      expect(q.args.join(" ")).not.toContain(token);
+    }
   });
 });
 
 describe("update notice", () => {
-  it("appears once a day after an interactive command", () => {
+  it("says once a day that a newer release exists", () => {
     const f = setup();
-    seed(f, Math.floor(Date.now() / 1000));
+    f.publish("0.0.9");
     expect(tty(f, ["secret", "list"])).toContain(notice);
-    expect(
-      JSON.parse(readFileSync(f.state, "utf-8")).notified_at
-    ).toBeGreaterThan(0);
     expect(tty(f, ["secret", "list"])).not.toContain(notice);
+    expect(f.requests()).toHaveLength(1);
+  });
+
+  it("uses the release ec update found without asking GitHub again", () => {
+    const f = setup();
+    f.run(["update", "--check"], {
+      EC_RELEASE_MANIFEST: f.release("0.0.9").manifest,
+    });
+    expect(tty(f, ["secret", "list"])).toContain(notice);
+    expect(f.requests()).toHaveLength(0);
   });
 
   it.each([
@@ -312,32 +366,23 @@ describe("update notice", () => {
     ["EC_NO_UPDATE", ["secret", "list"], { EC_NO_UPDATE: "1" }],
   ])("stays quiet with %s", (_name, args, extra) => {
     const f = setup();
-    seed(f, Math.floor(Date.now() / 1000));
+    f.publish("0.0.9");
     expect(tty(f, args, extra)).not.toContain(notice);
+  });
+
+  it("keeps the notice on with EC_NO_UPDATE=false", () => {
+    const f = setup();
+    f.publish("0.0.9");
+    expect(tty(f, ["secret", "list"], { EC_NO_UPDATE: "false" })).toContain(
+      notice
+    );
   });
 
   it("stays quiet when output is not a terminal", () => {
     const f = setup();
-    seed(f, Math.floor(Date.now() / 1000));
+    f.publish("0.0.9");
     const r = f.run(["secret", "list"]);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout + r.stderr).not.toContain("Update available");
-  });
-
-  it("checks GitHub when the last check is a day old", () => {
-    const f = setup();
-    seed(f, 0, "0.0.5");
-    write(f.root, "latest.json", JSON.stringify({ tag_name: "v0.0.9" }));
-    f.fake(
-      "curl",
-      `const fs = require("node:fs");
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.HOME + "/requests", args.join(" ") + "\\n");
-fs.copyFileSync(${JSON.stringify(path.join(f.root, "latest.json"))}, args[args.indexOf("-o") + 1]);`
-    );
-    expect(tty(f, ["secret", "list"])).toContain(notice);
-    const requests = readFileSync(path.join(f.home, "requests"), "utf-8");
-    expect(requests.trim().split("\n")).toHaveLength(1);
-    expect(requests).toContain("--max-time 3");
   });
 });

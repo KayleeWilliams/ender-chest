@@ -13,15 +13,17 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cliRoot, filePermissions, workspaceRoot, write } from "./fixture.ts";
+import {
+  ec,
+  filePermissions,
+  hostTarget,
+  targets,
+  workspaceRoot,
+  write,
+} from "./fixture.ts";
 
 const roots: string[] = [];
-const names = [
-  "ec-aarch64-macos",
-  "ec-x86_64-macos",
-  "ec-aarch64-linux",
-  "ec-x86_64-linux",
-];
+const names = targets.map((t) => `ec-${t.key}`);
 const digest = (data: Buffer) =>
   createHash("sha256").update(data).digest("hex");
 afterEach(() => {
@@ -30,25 +32,38 @@ afterEach(() => {
   }
 });
 
+// Real headers, written out here rather than read from targets.json, so a wrong
+// value in that table fails packaging instead of agreeing with itself.
+const elf = (machine: number) => {
+  const data = Buffer.alloc(32);
+  Buffer.from("7f454c460201", "hex").copy(data);
+  data.writeUInt16LE(machine, 18);
+  return data;
+};
+const machO = (hex: string) => {
+  const data = Buffer.alloc(32);
+  Buffer.from(hex, "hex").copy(data);
+  return data;
+};
+const headers = new Map([
+  ["aarch64-linux", elf(183)],
+  ["aarch64-macos", machO("cffaedfe0c000001")],
+  ["x86_64-linux", elf(62)],
+  ["x86_64-macos", machO("cffaedfe07000001")],
+]);
+
 const fixture = () => {
   const root = mkdtempSync(path.join(tmpdir(), "ec-package-test-"));
   roots.push(root);
   const artifacts = path.join(root, "artifacts");
   const output = path.join(root, "publish");
-  const host = `ec-${process.arch === "arm64" ? "aarch64" : "x86_64"}-${process.platform === "darwin" ? "macos" : "linux"}`;
-  for (const name of names) {
-    let data = Buffer.alloc(32);
-    if (name === host) {
-      data = readFileSync(path.join(cliRoot, "zig-out/bin/ec"));
-    } else if (name.endsWith("macos")) {
-      Buffer.from(
-        name.includes("aarch64") ? "cffaedfe0c000001" : "cffaedfe07000001",
-        "hex"
-      ).copy(data);
-    } else {
-      Buffer.from("7f454c460201", "hex").copy(data);
-      data.writeUInt16LE(name.includes("aarch64") ? 183 : 62, 18);
+  for (const target of targets) {
+    const name = `ec-${target.key}`;
+    const header = headers.get(target.key);
+    if (!header) {
+      throw new Error(`No known binary header for ${target.key}.`);
     }
+    const data = target.key === hostTarget() ? readFileSync(ec) : header;
     const dir = path.join(artifacts, name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, name), data);
@@ -161,14 +176,17 @@ describe("release packaging", () => {
       { encoding: "utf-8", env, timeout: 15_000 }
     );
     expect(install.status, install.stdout + install.stderr).toBe(0);
-    const ec = path.join(prefix, "bin/ec");
-    const help = spawnSync(ec, ["--help", "--json"], {
+    const installed = path.join(prefix, "bin/ec");
+    const help = spawnSync(installed, ["--help", "--json"], {
       encoding: "utf-8",
       env,
     });
     expect(help.status, help.stderr).toBe(0);
     expect(JSON.parse(help.stdout).ok).toBe(true);
-    const bad = spawnSync(ec, ["unknown-command"], { encoding: "utf-8", env });
+    const bad = spawnSync(installed, ["unknown-command"], {
+      encoding: "utf-8",
+      env,
+    });
     expect(bad.status).toBe(2);
     expect(bad.stderr).toContain("Unknown command unknown-command");
   });
@@ -194,4 +212,14 @@ describe("release packaging", () => {
       expect(existsSync(f.output)).toBe(false);
     }
   );
+
+  it("numbers patch releases from 0.0.1", () => {
+    const script = path.join(workspaceRoot, "tools/release-version.sh");
+    const run = (arg?: string) =>
+      spawnSync(script, arg === undefined ? [] : [arg], { encoding: "utf-8" });
+    expect(run().stdout).toBe("0.0.1\n");
+    expect(run("v0.0.1").stdout).toBe("0.0.2\n");
+    expect(run("0.0.9").stdout).toBe("0.0.10\n");
+    expect(run("0.1.0").status).not.toBe(0);
+  });
 });

@@ -1,8 +1,8 @@
 name = "executor"
-description = "Share one Executor MCP server with Claude Code, Codex, and Grok."
-run = "ec:executor"
+description = "Share one Executor MCP server with your coding agents."
 
 [settings.url]
+type = "url"
 required = true
 description = "Server origin with its port, such as https://mcp.example.test:4312."
 
@@ -28,6 +28,7 @@ examples = ["ec executor url", "ec executor url --json"]
 
 [[commands]]
 name = "status"
+needs = ["key"]
 description = "Check that Executor answers and accepts the key."
 usage = "ec executor status"
 effects = [
@@ -37,6 +38,7 @@ examples = ["ec executor status", "ec executor status --json"]
 
 [[commands]]
 name = "restart"
+needs = ["key"]
 description = "Restart Executor on its host and wait until it answers."
 usage = "ec executor restart"
 effects = [
@@ -47,6 +49,7 @@ examples = ["ec executor restart"]
 
 [[commands]]
 name = "update"
+needs = ["key"]
 description = "Install or upgrade Executor on its host and reload it."
 usage = "ec executor update"
 effects = [
@@ -58,6 +61,7 @@ examples = ["ec executor update"]
 
 [[commands]]
 name = "pair"
+needs = ["key"]
 description = "Print a one-use link that signs a browser into the dashboard."
 usage = "ec executor pair"
 effects = [
@@ -67,6 +71,7 @@ examples = ["ec executor pair"]
 
 [[commands]]
 name = "serve"
+needs = ["key"]
 description = "Run the server in the foreground. The launch agent runs this."
 usage = "ec executor serve"
 effects = [

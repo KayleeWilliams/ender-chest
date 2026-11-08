@@ -1,11 +1,12 @@
 // Reads ender-chest.toml, the file that marks a config checkout and lists what sync applies.
 const std = @import("std");
 const builtin = @import("builtin");
-const toml = @import("toml");
+const toml_doc = @import("toml_doc.zig");
 const core = @import("core.zig");
+const paths = @import("paths.zig");
 const C = core.Context;
-
-pub const file_name = "ender-chest.toml";
+const Table = toml_doc.Table;
+const str = toml_doc.str;
 
 pub const Filter = struct {
     os: ?[]const u8 = null,
@@ -19,11 +20,21 @@ pub const Filter = struct {
 };
 // A file copied from home/<rel>, or from `from`, to ~/<rel>. A `once` file is created when
 // missing and then left to the machine: sync never overwrites it and push never captures it.
-pub const File = struct { rel: []const u8, mode: u32 = 0o644, from: ?[]const u8 = null, once: bool = false, filter: Filter = .{} };
+pub const File = struct {
+    rel: []const u8,
+    mode: u32 = 0o644,
+    from: ?[]const u8 = null,
+    once: bool = false,
+    filter: Filter = .{},
+    // The copy in the checkout.
+    pub fn source(f: File, c: *C) ![]const u8 {
+        return if (f.from) |from| paths.inRepo(c, from) else c.path(&.{ c.repo, paths.home_dir, f.rel });
+    }
+};
 // A shell command run from the checkout on each sync, unless `creates` already exists.
 pub const Step = struct { name: []const u8, run: []const u8, creates: ?[]const u8 = null, filter: Filter = .{} };
 pub const Brewfile = struct { path: []const u8, filter: Filter = .{} };
-pub const PluginEntry = struct { name: []const u8, source: ?[]const u8 = null, settings: *const toml.Table };
+pub const PluginEntry = struct { name: []const u8, source: ?[]const u8 = null, settings: *const Table };
 pub const Manifest = struct {
     files: []const File = &.{},
     setup: []const Step = &.{},
@@ -36,16 +47,19 @@ pub const Manifest = struct {
 };
 
 pub fn load(c: *C) !Manifest {
-    const file = try c.path(&.{ c.repo, file_name });
-    const text = try c.optional(file) orelse return c.fail("No {s} in {s}. Every config repo needs one; see examples/config.", .{ file_name, c.repo });
-    return parse(c.a, text) catch |err| c.fail("Invalid {s}: {s}.", .{ file_name, describe(err) });
+    const file = try paths.inRepo(c, paths.manifest_file);
+    const text = try c.optional(file) orelse return c.fail("No {s} in {s}. Every config repo needs one; start from https://github.com/KayleeWilliams/ender-chest-template.", .{ paths.manifest_file, c.repo });
+    return parse(c.a, text) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => c.fail("Invalid {s}: {s}.", .{ paths.manifest_file, describe(err) }),
+    };
 }
 
-const ParseError = error{ InvalidFile, InvalidMode, InvalidPath, InvalidStep, InvalidBrewfile, InvalidPlugin, InvalidFilter, OutOfMemory };
 fn describe(err: anyerror) []const u8 {
     return switch (err) {
         error.InvalidFile => "files is a list of paths, or tables with a path",
         error.InvalidMode => "file mode must be an octal string such as \"600\"",
+        error.InvalidOnce => "once must be true or false",
         error.InvalidPath => "paths must be relative, without .. or leading dashes",
         error.InvalidStep => "each [[setup]] step needs a name and a run command",
         error.InvalidBrewfile => "packages.brewfiles entries are paths or tables with a path",
@@ -56,10 +70,8 @@ fn describe(err: anyerror) []const u8 {
 }
 
 pub fn parse(a: std.mem.Allocator, text: []const u8) !Manifest {
-    var parser = toml.Parser(toml.Table).init(a);
-    // The parsed tables stay alive with the process arena; plugin settings point into them.
-    const parsed = try parser.parseString(text);
-    const root = &parsed.value;
+    // The parsed tables live in `a`, an arena; plugin settings point into them.
+    const root = try toml_doc.parse(a, text);
     var m: Manifest = .{};
 
     if (root.get("files")) |v| {
@@ -75,7 +87,7 @@ pub fn parse(a: std.mem.Allocator, text: []const u8) !Manifest {
                         if (!safeRel(from)) return error.InvalidPath;
                         f.from = from;
                     }
-                    if (t.get("once")) |once| f.once = once == .boolean and once.boolean;
+                    if (t.get("once")) |once| f.once = if (once == .boolean) once.boolean else return error.InvalidOnce;
                     break :blk f;
                 },
                 else => return error.InvalidFile,
@@ -116,21 +128,19 @@ pub fn parse(a: std.mem.Allocator, text: []const u8) !Manifest {
     if (root.get("plugins")) |v| {
         if (v != .table) return error.InvalidPlugin;
         var plugins: std.ArrayList(PluginEntry) = .empty;
-        for (try sortedKeys(a, v.table)) |name| {
+        for (try toml_doc.sortedKeys(a, v.table)) |name| {
             const entry = v.table.get(name).?;
-            if (entry != .table or !pluginName(name)) return error.InvalidPlugin;
-            try plugins.append(a, .{ .name = name, .source = str(entry.table, "source"), .settings = entry.table });
+            if (entry != .table or !@import("plugin_manifest.zig").pluginName(name)) return error.InvalidPlugin;
+            // `source` says where the plugin comes from; every other key is a setting.
+            const source = str(entry.table, "source");
+            _ = entry.table.remove("source");
+            try plugins.append(a, .{ .name = name, .source = source, .settings = entry.table });
         }
         m.plugins = plugins.items;
     }
     return m;
 }
 
-pub fn pluginName(name: []const u8) bool {
-    if (name.len == 0 or name.len > 64 or !std.ascii.isLower(name[0])) return false;
-    for (name) |ch| if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '-' and ch != '_') return false;
-    return true;
-}
 pub fn safeRel(p: []const u8) bool {
     if (p.len == 0 or p[0] == '/' or p[0] == '-' or p[0] == '~') return false;
     var parts = std.mem.splitScalar(u8, p, '/');
@@ -138,52 +148,25 @@ pub fn safeRel(p: []const u8) bool {
     for (p) |ch| if (ch < 32 or ch == 127 or ch == '\\') return false;
     return true;
 }
-pub fn str(t: *const toml.Table, key: []const u8) ?[]const u8 {
-    const v = t.get(key) orelse return null;
-    return if (v == .string) v.string else null;
-}
-pub fn strings(a: std.mem.Allocator, t: *const toml.Table, key: []const u8) !?[]const []const u8 {
-    const v = t.get(key) orelse return null;
-    if (v != .array) return error.InvalidFilter;
-    const out = try a.alloc([]const u8, v.array.items.len);
-    for (v.array.items, 0..) |item, i| {
-        if (item != .string) return error.InvalidFilter;
-        out[i] = item.string;
-    }
-    return out;
-}
-pub fn sortedKeys(a: std.mem.Allocator, t: *const toml.Table) ![][]const u8 {
-    const keys = try a.alloc([]const u8, t.count());
-    var it = t.keyIterator();
-    var i: usize = 0;
-    while (it.next()) |k| : (i += 1) keys[i] = k.*;
-    std.mem.sort([]const u8, keys, {}, struct {
-        fn less(_: void, x: []const u8, y: []const u8) bool {
-            return std.mem.lessThan(u8, x, y);
-        }
-    }.less);
-    return keys;
-}
-fn filter(a: std.mem.Allocator, t: *const toml.Table) !Filter {
+fn filter(a: std.mem.Allocator, t: *const Table) !Filter {
     var f: Filter = .{};
     if (t.get("os")) |os| {
         if (os != .string or !(core.eql(u8, os.string, "macos") or core.eql(u8, os.string, "linux"))) return error.InvalidFilter;
         f.os = os.string;
     }
-    if (try strings(a, t, "profiles")) |p| f.profiles = p;
+    if (toml_doc.strings(a, t, "profiles") catch |err| return if (err == error.OutOfMemory) err else error.InvalidFilter) |p| f.profiles = p;
     return f;
 }
-fn parseMode(v: toml.Value) !u32 {
+fn parseMode(v: toml_doc.Value) !u32 {
     if (v != .string) return error.InvalidMode;
     const mode = std.fmt.parseInt(u32, v.string, 8) catch return error.InvalidMode;
     if (mode == 0 or mode > 0o777) return error.InvalidMode;
     return mode;
 }
-// Expands a leading ~/ against HOME.
 pub fn expand(c: *C, p: []const u8) ![]const u8 {
-    if (std.mem.startsWith(u8, p, "~/")) return c.path(&.{ c.home, p[2..] });
+    if (std.mem.startsWith(u8, p, "~/")) return paths.inHome(c, p[2..]);
     if (std.fs.path.isAbsolute(p)) return p;
-    return c.path(&.{ c.repo, p });
+    return paths.inRepo(c, p);
 }
 
 test "manifest lists files, steps, brewfiles, and plugins" {
@@ -217,11 +200,12 @@ test "manifest lists files, steps, brewfiles, and plugins" {
     try std.testing.expectEqualStrings("plugins/hello", m.plugin("hello").?.source.?);
     try std.testing.expect(m.plugin("wol").?.source == null);
 }
-test "manifest rejects paths that leave the checkout or home" {
+test "manifest rejects paths that leave the checkout or home, and invalid values" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     try std.testing.expectError(error.InvalidPath, parse(arena.allocator(), "files = [\"../.zshrc\"]\n"));
     try std.testing.expectError(error.InvalidPath, parse(arena.allocator(), "files = [\"/etc/passwd\"]\n"));
     try std.testing.expectError(error.InvalidMode, parse(arena.allocator(), "files = [{ path = \".x\", mode = \"999\" }]\n"));
+    try std.testing.expectError(error.InvalidOnce, parse(arena.allocator(), "files = [{ path = \".x\", once = \"true\" }]\n"));
     try std.testing.expectError(error.InvalidPlugin, parse(arena.allocator(), "[plugins.\"../x\"]\n"));
 }

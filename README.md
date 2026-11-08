@@ -1,4 +1,4 @@
-![Ender Chest inventory holding the logos of Codex, Claude, Meta Muse, Grok, Gemini, Cursor, OpenCode, Amp, Tembo, T3 Code, Orca, skills.sh, MCP, Executor, CLIProxyAPI, Tailscale, GitHub, Git, Homebrew, Zed, macOS, and Linux](docs/assets/ender-chest.png)
+![Ender Chest](docs/assets/ender-chest.png)
 
 # Ender Chest
 
@@ -38,30 +38,15 @@ ec --help
 
 The package is prepared as `ender-chest`, with the command `ec`. It has not been published to the npm registry. `npm install -g ender-chest` becomes available after a separate public publication.
 
-## Create your config repo
+## Get started
 
-Clone the examples and copy the starter to a separate directory:
+Create your config repo from [ender-chest-template](https://github.com/KayleeWilliams/ender-chest-template) with **Use this template**, then follow [its README](examples/config/README.md#start) to clone and sync it.
 
-```sh
-git clone --depth 1 https://github.com/KayleeWilliams/ender-chest.git ~/ender-chest
-cp -R ~/ender-chest/examples/config ~/my-machine-config
-git -C ~/my-machine-config init
-```
+The template is published from [examples/config](examples/config/README.md) with each release. For instructions tied to one codebase, copy [examples/project](examples/project/AGENTS.md) into it.
 
-The [starter guide](examples/config/README.md) explains the shared `AGENTS.md`, Claude/Codex/Grok preferences, bundled review skill, and device-local overrides. Edit the shared instructions to match how you work. Set your Git identity in `~/.gitconfig.local`. The example contains no credentials and enables no plugins.
-
-For instructions tied to an individual codebase, see the separate [project example](examples/project/README.md).
-
-```sh
-ec sync --repo ~/my-machine-config --skip-packages
-ec verify
-```
-
-Sync writes the home files listed in `ender-chest.toml`, including shell and Git config. The first time it replaces a file that differs, it keeps your old copy under `~/.config/ender-chest/backup/`.
-
-`--skip-packages` skips Brewfiles and setup steps. Without it, the starter's sync installs Homebrew if needed, its Brewfiles, Oh My Zsh, shell plugins, and a Node version through fnm.
-
-Add a remote for your config repo if you want to sync between machines. Keep that repo private if it contains personal hostnames or other private settings. The CLI source and release history remain separate from your config.
+- [Config reference](docs/config.md): `ender-chest.toml`, agent settings, skills, profiles, and recipes.
+- [Plugins](docs/plugins.md): the built-in plugins, writing your own, and secrets.
+- [Devices](docs/devices.md): checking and syncing every machine over SSH.
 
 ## Commands
 
@@ -71,69 +56,12 @@ ec sync --all               # sync every reachable machine that is behind
 ec push                     # capture portable config, commit, and push
 ec push --dry-run           # capture into the checkout without committing
 ec verify                   # read-only checks
-ec status                   # every machine's ec version, over Tailscale and SSH
+ec status                   # every machine's ec version and config commit
 ec plugin list              # show enabled plugins and their commands
 ec secret set NAME          # save a secret that plugin settings use
 ```
 
-`push --dry-run` still writes files into the checkout. A push does not update other machines. A dirty checkout skips pulling and applies local files. A failed pull also applies local files with a warning.
-
 Use `ec <command> --help` for options and effects. `--json` produces one result on stdout, with diagnostics on stderr. `ec --help --json` describes commands, typed options, defaults, and side effects without reading config or making network requests.
-
-Config selection is `--repo`, then `EC_REPO`, then a config checkout in the current directory, then the path saved by the last sync. An implicitly selected linked worktree resolves to its primary checkout. Use `--repo` to apply a particular worktree.
-
-## ender-chest.toml
-
-`ender-chest.toml` at the root of your config repo lists what sync applies:
-
-```toml
-files = [
-  ".zshrc",
-  { path = ".ssh/config", mode = "600" },
-  { path = ".config/zed/settings.json", profiles = ["mac"] },
-  { path = ".gitconfig.local", from = "git/gitconfig.local.example", once = true },
-]
-
-[packages]
-brewfiles = ["tools/Brewfile", { path = "tools/Brewfile.mac", profiles = ["mac"] }]
-
-[[setup]]
-name = "Oh My Zsh"
-creates = "~/.oh-my-zsh"
-run = "curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh"
-
-[plugins.executor]
-url = "https://mcp.example.test:4312"
-key = { secret = "executor" }
-```
-
-- `files` copies `home/<path>` in the checkout to `~/<path>`. `mode`, `os` (`macos` or `linux`), and `profiles` narrow an entry, and `from` reads a different checkout path. A `once` file is created when missing and then belongs to the machine: sync never overwrites it and push never captures it.
-- `[packages]` Brewfiles and `[[setup]]` steps run on each sync. Steps run with `/bin/sh` from the checkout. A step whose `creates` path exists is skipped. `os` and `profiles` work here too.
-- `ec push` copies the other listed files back into the checkout. It stages only `home/`, `skills/`, `agents/`, `plugins/`, `ender-chest.toml`, `ender-chest.lock`, and `from` paths.
-
-The profile is `mac` on macOS and `cloud` elsewhere, or when a CI or cloud-agent variable is set. Pass `--profile NAME` to choose one.
-
-## Plugins
-
-Plugins add commands to `ec`, and can give Claude Code, Codex, and Grok an MCP server or a model provider. These ship with `ec`:
-
-| Plugin | Use |
-| --- | --- |
-| `cliproxyapi` | Route the agents through a [CLIProxyAPI](docs/setup.md#cliproxyapi-host) server. |
-| `executor` | Share one Executor MCP server across machines. |
-| `wol` | Wake a machine with Wake-on-LAN and wait until it answers. |
-| `kde` | Unlock KWallet and shut down a KDE Plasma machine over SSH. |
-| `quiet` | Stop stale dev servers and containers before a benchmark. |
-
-Enable one with a `[plugins.NAME]` table. `ec NAME --help` lists its commands and settings. When you remove a plugin and sync, `ec` removes what it added to agent settings and keeps your other MCP servers and providers.
-
-You can write your own plugin in any language and load it from your config repo or a GitHub repository. See [plugins](docs/plugins.md).
-
-## Secrets
-
-`ec secret set NAME` reads a value from a hidden prompt, or from stdin when piped, and stores it in `~/.config/ender-chest/secrets/NAME` with mode `0600`. Refer to it from a plugin setting as `{ secret = "NAME" }`. `ec secret list` prints names only, and `ec secret remove NAME` deletes one.
-
-Secrets stay on the machine. Sync writes the ones that plugins contribute into agent settings, so those settings stay on-device too. Push does not capture them, and it refuses a checkout that contains a secret file. See [credential handling](SECURITY.md).
 
 ## Updates
 
@@ -141,7 +69,7 @@ CLI releases come from `KayleeWilliams/ender-chest`, independently of your confi
 
 Run `ec update` to install the latest release. It downloads the binary for your machine, checks its sha256 against the release manifest, runs it once, and then replaces the `ec` you ran. A failed step leaves the old binary in place. `ec update --check` reports the latest release without installing it, and `--json` returns the versions and release notes link.
 
-`ec sync` installs a newer release before it applies your config, then resumes with the new binary. It never installs an older release, and it leaves development builds alone. In a checkout that contains ec's own sources, sync installs the release built from those sources, or rebuilds with Zig.
+`ec sync` installs a newer release before it applies your config, then resumes with the new binary. It never installs an older release, and it leaves development builds alone.
 
 After an interactive command such as `ec verify`, ec says when a newer release exists:
 
@@ -149,7 +77,7 @@ After an interactive command such as `ec verify`, ec says when a newer release e
 Update available 0.0.5 → 0.0.6 · Run ec update
 ```
 
-The notice appears at most once a day. The check sends one request to the GitHub releases API at most once a day, with no account or command details, and gives up after about three seconds. `ec sync`, `ec update`, plugin commands, `--json`, CI, and output that is not a terminal skip it. Set `EC_NO_UPDATE=1` or `NO_UPDATE_NOTIFIER=1` to turn off the notice; `EC_NO_UPDATE=1` also stops sync from installing releases.
+The notice appears at most once a day. The check sends one request to the GitHub releases API at most once a day, with no account or command details, and gives up after about three seconds. `ec sync`, `ec update`, plugin commands, `--json`, CI, and output that is not a terminal skip it. Set `EC_NO_UPDATE=1` or `NO_UPDATE_NOTIFIER=1` to turn off the notice; `EC_NO_UPDATE=1` also stops sync from installing releases and `ec status` from reading the latest release.
 
 If you installed the npm tarball, `ec update` prints the commands that install the newer tarball. For a project dependency, update `ender-chest` in that project.
 
@@ -176,21 +104,22 @@ mkdir -p ~/.local/bin
 install -m 755 packages/ec/zig-out/bin/ec ~/.local/bin/ec
 ```
 
-The hooks in `.githooks` run `tools/check-private.sh` before each commit and push. It runs Gitleaks when installed, and blocks any fixed string listed in `~/.config/ender-chest/private-patterns`. Use that file for your own hostnames, addresses, and keys; it stays outside the repo.
+The hooks in `.githooks` check each commit and push for secrets and private hostnames; [AGENTS.md](AGENTS.md) explains the pattern file they read.
 
 `pnpm check` runs lint, type checks, Vitest integration tests, and native Zig tests. The integration tests exercise the compiled CLI in temporary homes and Git repos, including HTTP requests, UDP packets, config uploads, and local credential handling.
 
 ```text
 packages/ec/src/      native Zig implementation
 packages/ec/test/     Vitest integration tests and fixtures
-examples/config/     example machine config
-tools/               shared build and lint tooling
-docs/                setup guides
+examples/config/      the config template, published to ender-chest-template
+examples/project/     example instructions for one codebase
+tools/                build, release, and lint tooling
+docs/                 config, plugin, and device guides
 ```
 
 Run `pnpm --filter ender-chest <script>` to target the CLI package. `./ec` builds and runs it without requiring Node. CI checks the workspace on macOS and Linux, builds all four native targets, and scans Git history for secrets.
 
-The manual release workflow packages the binaries, checksums, installer, and npm tarball. It checks the native targets and shared source hash, then installs the tarball offline and runs `ec --version` before publishing to GitHub Releases. It does not publish to npm or change repository visibility.
+The manual release workflow packages the binaries, checksums, installer, and npm tarball. It checks the native targets and shared source hash, then installs the tarball offline and runs `ec --version` before publishing to GitHub Releases. It does not publish to npm or change repository visibility. When the `TEMPLATE_TOKEN` secret is set, it then publishes `examples/config` to ender-chest-template with `tools/publish-template.sh`.
 
 [FX](https://github.com/vercel-labs/fx) informed the native binary and Zig test setup. [Inth](https://github.com/inthhq/inth/tree/main/packages/cli) informed grouped commands, scoped help, typed discovery, and stable errors. Ender Chest uses its own implementation.
 

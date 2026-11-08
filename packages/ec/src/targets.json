@@ -1,0 +1,14 @@
+[
+  {
+    "key": "aarch64-macos",
+    "zig": "aarch64-macos.13.0",
+    "magic": "cffaedfe0c000001"
+  },
+  {
+    "key": "x86_64-macos",
+    "zig": "x86_64-macos.13.0",
+    "magic": "cffaedfe07000001"
+  },
+  { "key": "aarch64-linux", "zig": "aarch64-linux-musl", "elf_machine": 183 },
+  { "key": "x86_64-linux", "zig": "x86_64-linux-musl", "elf_machine": 62 }
+]

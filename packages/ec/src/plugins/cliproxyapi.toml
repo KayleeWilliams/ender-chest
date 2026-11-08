@@ -1,8 +1,8 @@
 name = "cliproxyapi"
 description = "Point Claude Code, Codex, and Grok at a CLIProxyAPI server."
-run = "ec:cliproxyapi"
 
 [settings.url]
+type = "url"
 required = true
 description = "Proxy origin without /v1, such as https://proxy.example.test:8317."
 
@@ -28,6 +28,7 @@ examples = ["ec cliproxyapi url", "ec cliproxyapi url --json"]
 
 [[commands]]
 name = "models"
+needs = ["key"]
 description = "List the models the proxy serves."
 usage = "ec cliproxyapi models"
 effects = [
@@ -37,6 +38,7 @@ examples = ["ec cliproxyapi models", "ec cliproxyapi models --json"]
 
 [[commands]]
 name = "restart"
+needs = ["key"]
 description = "Restart the proxy on its host and wait until it answers."
 usage = "ec cliproxyapi restart"
 effects = [
@@ -47,6 +49,7 @@ examples = ["ec cliproxyapi restart"]
 
 [[commands]]
 name = "run"
+needs = ["key"]
 description = "Run a command with OPENAI_BASE_URL and OPENAI_API_KEY set."
 usage = "ec cliproxyapi run <command> [args...]"
 passthrough = true

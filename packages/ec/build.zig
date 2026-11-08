@@ -6,11 +6,9 @@ pub fn build(b: *std.Build) void {
     const toml = b.dependency("toml", .{ .target = target, .optimize = optimize });
     module.addImport("toml", toml.module("toml"));
     const source_hash = @import("src/source_hash.zig").fingerprint(b.allocator, b.graph.io, b.pathFromRoot(".")) catch @panic("cannot hash ec sources");
-    std.Io.Dir.cwd().createDirPath(b.graph.io, "zig-out") catch @panic("cannot create zig-out");
-    var hash_text: [65]u8 = undefined;
-    @memcpy(hash_text[0..64], &source_hash);
-    hash_text[64] = '\n';
-    std.Io.Dir.cwd().writeFile(b.graph.io, .{ .sub_path = "zig-out/source_hash.txt", .data = &hash_text }) catch @panic("cannot write source hash");
+    // Release tooling compares this file with the hash a binary reports.
+    const hash_file = b.addWriteFiles().add("source_hash.txt", b.fmt("{s}\n", .{&source_hash}));
+    b.getInstallStep().dependOn(&b.addInstallFile(hash_file, "source_hash.txt").step);
     const version = b.option([]const u8, "version", "ec release version") orelse "dev";
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);

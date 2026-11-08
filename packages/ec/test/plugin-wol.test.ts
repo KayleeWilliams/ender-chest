@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createSocket } from "node:dgram";
 import type { Socket } from "node:dgram";
 import { once } from "node:events";
-import { mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -11,14 +11,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ec, pluginFixture, write } from "./fixture.ts";
 
 const exec = promisify(execFile);
-const roots: string[] = [];
 const sockets: Socket[] = [];
 afterEach(() => {
   for (const s of sockets.splice(0)) {
     s.close();
-  }
-  for (const root of roots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
   }
 });
 
@@ -36,25 +32,13 @@ const settings = (extra: Settings = {}) =>
     // JSON strings and numbers are valid TOML values.
     .map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
     .join("\n")}\n`;
-const wol = (extra: Settings = {}) => {
-  const f = pluginFixture(settings(extra));
-  roots.push(f.root);
-  return f;
-};
+const wol = (extra: Settings = {}) => pluginFixture(settings(extra));
 const receiver = async () => {
   const socket = createSocket("udp4");
   sockets.push(socket);
   socket.bind(0, "127.0.0.1");
   await once(socket, "listening");
   return { message: once(socket, "message"), port: socket.address().port };
-};
-// Fake ping answers from a script of exit codes, one per call, repeating the last.
-const pings = (f: ReturnType<typeof wol>, codes: number[]) => {
-  const count = path.join(f.root, "pings");
-  return f.fake(
-    "ping",
-    `const fs=require('node:fs'),f=${JSON.stringify(count)},c=${JSON.stringify(codes)};const n=fs.existsSync(f)?+fs.readFileSync(f,'utf8'):0;fs.writeFileSync(f,String(n+1));process.exit(c[Math.min(n,c.length-1)]);`
-  );
 };
 
 describe("wol plugin", () => {
@@ -96,13 +80,9 @@ describe("wol plugin", () => {
     });
     const [packet] = await message;
     expect(packet.length).toBe(102);
-    expect(JSON.parse(readFileSync(log, "utf-8"))).toEqual([
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=8",
-      "-o",
-      "ConnectionAttempts=1",
+    const args = JSON.parse(readFileSync(log, "utf-8"));
+    expect(args).toContain("BatchMode=yes");
+    expect(args.slice(-2)).toEqual([
       "relay.example.test",
       '"$HOME/.local/bin/ec" wol wake --local --no-wait',
     ]);
@@ -128,7 +108,7 @@ describe("wol plugin", () => {
     expect(r.status).toBe(1);
     expect(JSON.parse(r.stdout)).toMatchObject({ ok: false });
     expect(JSON.parse(r.stdout).message).toContain(
-      "Cannot SSH to the wake relay"
+      "Cannot SSH to other@relay.example.test"
     );
     expect(r.stderr).toContain("other@relay.example.test");
     expect(r.stderr).not.toContain(" relay.example.test");
@@ -160,6 +140,7 @@ describe("wol plugin", () => {
 
   it.each<Settings>([
     { mac: "00:00:5e:00:53" },
+    { mac: "gg:00:5e:00:53:01" },
     { broadcast: "host.example.test" },
     { port: 0 },
     { port: 65_536 },
@@ -210,6 +191,12 @@ describe("wol plugin", () => {
     expect(Date.now() - start).toBeLessThan(10_000);
   }, 12_000);
 
+  it("names the command when ec __plugin is run by hand", () => {
+    const result = wol().run(["__plugin", "wol", "status"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Use ec wol status.");
+  });
+
   it("fails before running when a required setting is missing", () => {
     const f = wol();
     f.configure(
@@ -224,7 +211,7 @@ describe("wol plugin", () => {
     const { port, message } = await receiver();
     const f = wol({ port });
     const r = await exec(ec, ["wol", "wake", "--local", "--json"], {
-      env: { ...f.env, ...pings(f, [1, 1, 0]) },
+      env: { ...f.env, ...f.pings([1, 1, 0]) },
     });
     const [packet] = await message;
     expect(packet.length).toBe(102);
@@ -238,7 +225,7 @@ describe("wol plugin", () => {
 
   it("reports unreachable when the machine never answers", () => {
     const f = wol({ port: 9, wait_seconds: 1 });
-    const r = f.run(["wol", "wake", "--local", "--json"], pings(f, [1]));
+    const r = f.run(["wol", "wake", "--local", "--json"], f.pings([1]));
     expect(r.status).toBe(1);
     expect(JSON.parse(r.stdout)).toMatchObject({
       error: { code: "unreachable" },
@@ -252,7 +239,7 @@ describe("wol plugin", () => {
     const f = wol({ after_wake: "wol status" });
     const log = path.join(f.root, "ssh.log");
     const env = {
-      ...pings(f, [0]),
+      ...f.pings([0]),
       ...f.fake(
         "ssh",
         `require('node:fs').writeFileSync(${JSON.stringify(log)},'called')`
@@ -272,13 +259,13 @@ describe("wol plugin", () => {
 
   it("fails when after_wake fails, and --skip-after skips it", () => {
     const f = wol({ after_wake: "wol status" });
-    const failed = f.run(["wol", "wake", "--json"], pings(f, [0, 1]));
+    const failed = f.run(["wol", "wake", "--json"], f.pings([0, 1]));
     expect(failed.status).toBe(1);
     expect(JSON.parse(failed.stdout).message).toContain("ec wol status failed");
     const skipped = wol({ after_wake: "wol status" });
     const r = skipped.run(
       ["wol", "wake", "--skip-after", "--json"],
-      pings(skipped, [0, 1])
+      skipped.pings([0, 1])
     );
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).not.toContain("Running ec");

@@ -1,6 +1,6 @@
 # Ender Chest
 
-The native CLI lives in `packages/ec/src`, with its built-in plugins in `packages/ec/src/plugins`. Its integration tests live in `packages/ec/test`. Shared tooling lives in `tools/`; example machine config lives in `examples/config`.
+The native CLI lives in `packages/ec/src`, with its built-in plugins in `packages/ec/src/plugins`. Its integration tests live in `packages/ec/test`. Shared tooling lives in `tools/`. `examples/config` is the source of the public ender-chest-template repo; releases publish it with `tools/publish-template.sh`, so edit it here, never in the template. Docs are one topic per file: `README.md` for install and commands, `docs/config.md`, `docs/plugins.md`, `docs/devices.md`, and `SECURITY.md`. Link to them instead of restating them.
 
 Use pnpm and Turborepo for workspace commands. `pnpm check` runs Ultracite, Zig formatting checks, TypeScript checks, Vitest, and native Zig tests. `pnpm format` applies Oxfmt and Zig formatting. Keep the Oxlint anti-slop rules aligned with the shared Inth tooling.
 

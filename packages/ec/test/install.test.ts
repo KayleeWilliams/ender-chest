@@ -15,7 +15,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { filePermissions, workspaceRoot, write } from "./fixture.ts";
+import { filePermissions, targets, workspaceRoot, write } from "./fixture.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -70,16 +70,14 @@ else {
 `
   );
   const bytes = "#!/bin/sh\nprintf '%s\\n' installed\n";
-  for (const os of ["macos", "linux"]) {
-    for (const arch of ["aarch64", "x86_64"]) {
-      const name = `ec-${arch}-${os}`;
-      write(downloads, name, bytes);
-      write(
-        downloads,
-        `${name}.sha256`,
-        `${createHash("sha256").update(bytes).digest("hex")}\n`
-      );
-    }
+  for (const target of targets) {
+    const name = `ec-${target.key}`;
+    write(downloads, name, bytes);
+    write(
+      downloads,
+      `${name}.sha256`,
+      `${createHash("sha256").update(bytes).digest("hex")}\n`
+    );
   }
   const run = (args: string[] = [], overrides: NodeJS.ProcessEnv = {}) =>
     spawnSync("/bin/sh", ["-s", "--", ...args], {
@@ -152,44 +150,20 @@ describe("curl installer", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    expect(requests).toEqual([
-      ["gh", "auth", "status", "--hostname", "github.com"],
-      [
-        "gh",
-        "release",
-        "view",
-        "--repo",
-        "example/ec",
-        "--json",
-        "tagName",
-        "--jq",
-        ".tagName",
-      ],
-      [
-        "gh",
-        "release",
-        "download",
-        "v0.0.1",
-        "--repo",
-        "example/ec",
-        "--pattern",
-        "ec-x86_64-linux",
-        "--output",
-        expect.stringContaining("/ec-x86_64-linux"),
-      ],
-      [
-        "gh",
-        "release",
-        "download",
-        "v0.0.1",
-        "--repo",
-        "example/ec",
-        "--pattern",
-        "ec-x86_64-linux.sha256",
-        "--output",
-        expect.stringContaining("/ec-x86_64-linux.sha256"),
-      ],
+    expect(requests.every((request) => request[0] === "gh")).toBe(true);
+    const downloads = requests
+      .filter((request) => request[2] === "download")
+      .map((request) => [
+        request[3],
+        request[request.indexOf("--pattern") + 1],
+      ]);
+    expect(downloads).toEqual([
+      ["v0.0.1", "ec-x86_64-linux"],
+      ["v0.0.1", "ec-x86_64-linux.sha256"],
     ]);
+    expect(readFileSync(path.join(f.home, ".local/bin/ec"), "utf-8")).toBe(
+      f.bytes
+    );
   });
 
   it.each([

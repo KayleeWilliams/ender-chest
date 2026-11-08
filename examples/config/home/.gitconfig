@@ -1,4 +1,2 @@
-[rerere]
-    enabled = true
 [include]
     path = .gitconfig.local

@@ -1,8 +1,7 @@
-# Seeds ~/.codex/config.toml only when that file does not exist.
-# Choose a model through Codex. Keep tokens and trusted project paths on-device.
+# Copied to ~/.codex/config.toml only on a machine that has none. Later edits here
+# don't reach existing machines.
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
-web_search = "cached"
 
 [tui]
 notifications = true

@@ -33,19 +33,25 @@ jobs:
           cache: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+  targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: targets
+        run: echo "targets=$(jq -c . packages/ec/src/targets.json)" >> "$GITHUB_OUTPUT"
   binaries:
+    needs: targets
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        target:
-          [
-            aarch64-macos.13.0,
-            x86_64-macos.13.0,
-            aarch64-linux-musl,
-            x86_64-linux-musl,
-          ]
+        include: ${{ fromJSON(needs.targets.outputs.targets) }}
     defaults:
       run:
         working-directory: packages/ec
@@ -55,10 +61,4 @@ jobs:
           persist-credentials: false
       - name: Install archive tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
-      - run: ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
-      - run: cd zig-out/bin && sha256sum ec > ec.sha256
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ec-${{ matrix.target }}
-          path: packages/ec/zig-out/bin/ec*
-          if-no-files-found: error
+      - run: ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig }}

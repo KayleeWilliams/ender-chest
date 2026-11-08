@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// Shared by the build and installed CLI. Sort paths and hash their names and bytes.
+// build.zig embeds this hash of ec's sources; release manifests and ec status compare it.
 pub fn fingerprint(a: std.mem.Allocator, io: std.Io, root: []const u8) ![64]u8 {
     var files: std.ArrayList([]const u8) = .empty;
     try files.appendSlice(a, &.{ "build.zig", "build.zig.zon", ".zig-version" });

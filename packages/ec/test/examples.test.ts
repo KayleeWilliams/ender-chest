@@ -1,274 +1,151 @@
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
-  mkdirSync,
-  mkdtempSync,
+  readdirSync,
   readFileSync,
-  readlinkSync,
-  rmSync,
-  writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { parse as toml } from "smol-toml";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import {
-  cliRoot,
-  filePermissions,
-  gitInit,
-  workspaceRoot,
-  write,
-} from "./fixture.ts";
+import { cliRoot, gitInit, pluginFixture, workspaceRoot } from "./fixture.ts";
 
-const executable = path.join(cliRoot, "zig-out/bin/ec");
-const roots: string[] = [];
+const example = path.join(workspaceRoot, "examples/config");
+const pluginDocs = path.join(workspaceRoot, "docs/plugins.md");
+const scheme = /^[a-z]+:/u;
 
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
+// The example as a committed checkout, with a temporary HOME.
 const starter = () => {
-  const root = mkdtempSync(path.join(tmpdir(), "ec-example-"));
-  roots.push(root);
-  const repo = path.join(root, "repo");
-  const home = path.join(root, "home");
-  cpSync(path.join(workspaceRoot, "examples/config"), repo, {
-    recursive: true,
-  });
-  mkdirSync(home);
-  gitInit(repo);
-  const env = {
-    EC_NO_UPDATE: "1",
-    EC_REPO: repo,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    HOME: home,
-    PATH: process.env.PATH,
+  const f = pluginFixture("");
+  cpSync(example, f.repo, { recursive: true });
+  gitInit(f.repo);
+  const git = (...args: string[]) => {
+    const r = spawnSync("git", args, { cwd: f.repo, encoding: "utf-8" });
+    expect(r.status, r.stderr).toBe(0);
+    return r.stdout;
   };
-  const run = (args: string[], input?: string) =>
-    spawnSync(executable, args, {
-      cwd: root,
-      encoding: "utf-8",
-      env,
-      input,
-      timeout: 15_000,
-    });
-  const sync = () => {
-    const result = run(["sync", "--skip-packages", "--json"]);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-  };
-  return { home, repo, run, sync };
-};
-
-// Uncomments one of the example [plugins.NAME] blocks in ender-chest.toml.
-const enable = (repo: string, name: string) => {
-  const file = path.join(repo, "ender-chest.toml");
-  const lines = readFileSync(file, "utf-8").split("\n");
-  const start = lines.indexOf(`# [plugins.${name}]`);
-  expect(start).toBeGreaterThan(-1);
-  for (let i = start; i < lines.length && lines[i]?.startsWith("# "); i += 1) {
-    lines[i] = lines[i]?.slice(2) ?? "";
-  }
-  writeFileSync(file, lines.join("\n"));
-};
-
-describe("config starter", () => {
-  it.each([false, true])(
-    "installs the shipped instructions, preferences, and skill with the proxy plugin=%s",
-    (withProxy) => {
-      const f = starter();
-      const token = "fixture-example-device-token";
-      if (withProxy) {
-        enable(f.repo, "cliproxyapi");
-        const setup = f.run(["secret", "set", "cliproxyapi", "--json"], token);
-        expect(setup.status, setup.stderr).toBe(0);
-        expect(setup.stdout + setup.stderr).not.toContain(token);
-      }
-      f.sync();
-
-      const instructions = readFileSync(
-        path.join(f.repo, "agents/shared/AGENTS.md"),
-        "utf-8"
-      );
-      for (const rel of [
-        ".claude/CLAUDE.md",
-        ".codex/AGENTS.md",
-        ".grok/AGENTS.md",
-      ]) {
-        expect(readFileSync(path.join(f.home, rel), "utf-8")).toBe(
-          instructions
-        );
-      }
-      const skill = path.join(f.home, ".agents/skills/review-changes");
-      expect(readFileSync(path.join(skill, "SKILL.md"), "utf-8")).toBe(
-        readFileSync(
-          path.join(f.repo, "skills/review-changes/SKILL.md"),
-          "utf-8"
-        )
-      );
-      for (const agent of [".claude", ".codex", ".grok"]) {
-        expect(
-          readlinkSync(path.join(f.home, agent, "skills/review-changes"))
-        ).toBe(skill);
-      }
-
-      const claude = JSON.parse(
-        readFileSync(path.join(f.home, ".claude/settings.json"), "utf-8")
-      );
-      const codex = toml(
-        readFileSync(path.join(f.home, ".codex/config.toml"), "utf-8")
-      );
-      const grok = toml(
-        readFileSync(path.join(f.home, ".grok/config.toml"), "utf-8")
-      );
-      expect(claude).toMatchObject({
-        attribution: { commit: "", pr: "", sessionUrl: false },
-        permissions: { defaultMode: "acceptEdits" },
-      });
-      expect(codex).toMatchObject({
-        approval_policy: "on-request",
-        sandbox_mode: "workspace-write",
-        tui: { notifications: true },
-        web_search: "cached",
-      });
-      expect(grok).toMatchObject({
-        cli: { auto_update: true },
-        ui: { compact_mode: false, max_thoughts_width: 120 },
-      });
-      expect(existsSync(path.join(f.home, ".claude.json"))).toBe(false);
-      expect(codex).not.toHaveProperty("mcp_servers.executor");
-      expect(grok).not.toHaveProperty("mcp_servers.executor");
-      const secret = path.join(
-        f.home,
-        ".config/ender-chest/secrets/cliproxyapi"
-      );
-      if (withProxy) {
-        expect(claude.env.ANTHROPIC_AUTH_TOKEN).toBe(token);
-        expect(codex).toHaveProperty(
-          "model_providers.cliproxyapi.experimental_bearer_token",
-          token
-        );
-        expect(filePermissions(secret)).toBe(0o600);
-      } else {
-        expect(existsSync(secret)).toBe(false);
-        expect(claude.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
-        expect(codex).not.toHaveProperty("model_provider");
-        expect(grok).not.toHaveProperty("model");
-      }
-
-      const verified = f.run(["verify", "--json"]);
-      expect(verified.status, verified.stdout + verified.stderr).toBe(0);
-      const captured = f.run(["push", "--dry-run", "--json"]);
-      expect(captured.status, captured.stdout + captured.stderr).toBe(0);
-      expect(captured.stdout + captured.stderr).not.toContain(token);
-      expect(
-        spawnSync("git", ["grep", "-I", token], { cwd: f.repo }).status
-      ).toBe(1);
-      for (const rel of [
-        "home/.config/ender-chest/secrets",
-        "home/.claude",
-        "home/.codex",
-        "home/.grok",
-      ]) {
-        expect(existsSync(path.join(f.repo, rel))).toBe(false);
-      }
-    }
-  );
-
-  it("merges Claude defaults but preserves existing Codex, Grok, and device overrides across syncs", () => {
-    const f = starter();
-    write(
-      f.home,
-      ".claude/settings.json",
-      JSON.stringify({
-        cleanupPeriodDays: 7,
-        env: { EDITOR: "vim" },
-        permissions: { defaultMode: "default" },
-      })
-    );
-    write(
-      f.home,
-      ".codex/config.toml",
-      'web_search = "disabled"\n[tui]\nnotifications = false\n'
-    );
-    write(
-      f.home,
-      ".grok/config.toml",
-      "[cli]\nauto_update = false\n[ui]\nmax_thoughts_width = 80\n"
-    );
-    const local = write(
-      f.home,
-      ".gitconfig.local",
-      "[user]\nname = Example Developer\nemail = developer@example.test\n"
-    );
-    const identity = readFileSync(local, "utf-8");
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      f.sync();
-      expect(
-        JSON.parse(
-          readFileSync(path.join(f.home, ".claude/settings.json"), "utf-8")
-        )
-      ).toMatchObject({
-        cleanupPeriodDays: 7,
-        env: { EDITOR: "vim" },
-        permissions: { defaultMode: "acceptEdits" },
-      });
-      expect(
-        toml(readFileSync(path.join(f.home, ".codex/config.toml"), "utf-8"))
-      ).toMatchObject({
-        tui: { notifications: false },
-        web_search: "disabled",
-      });
-      expect(
-        toml(readFileSync(path.join(f.home, ".grok/config.toml"), "utf-8"))
-      ).toMatchObject({
-        cli: { auto_update: false },
-        ui: { max_thoughts_width: 80 },
-      });
-      expect(readFileSync(local, "utf-8")).toBe(identity);
-      expect(existsSync(path.join(f.repo, "home/.gitconfig.local"))).toBe(
-        false
-      );
-    }
-  });
-
-  it("lists every built-in plugin example with valid settings", () => {
-    const f = starter();
-    const names = ["cliproxyapi", "executor", "kde", "quiet", "wol"];
-    for (const name of names) {
-      enable(f.repo, name);
-    }
-    const r = f.run(["plugin", "list", "--json"]);
+  git("add", ".");
+  git("commit", "-q", "-m", "Example");
+  const ok = (...args: string[]) => {
+    const r = f.run(args);
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    // SAFETY: ec plugin list --json reports each plugin's name and missing settings.
-    const plugins = JSON.parse(r.stdout).data.plugins as {
-      name: string;
-      missing: string[];
-    }[];
-    expect(plugins.map((p) => p.name)).toEqual(names);
-    // Only the secrets, which each machine stores with ec secret set, are missing.
-    expect(plugins.flatMap((p) => p.missing)).toEqual(["key", "key"]);
+    return r.stdout;
+  };
+  return { ...f, git, ok };
+};
+
+interface Setting {
+  type?: string;
+}
+interface BuiltinManifest {
+  settings?: Record<string, Setting>;
+}
+
+// The built-in plugins, from the manifests ec embeds.
+const builtins = readdirSync(path.join(cliRoot, "src/plugins"))
+  .filter((file) => file.endsWith(".toml"))
+  .map((file) => {
+    const text = readFileSync(path.join(cliRoot, "src/plugins", file), "utf-8");
+    // SAFETY: A built-in manifest is a TOML table whose settings are tables with an optional type.
+    const manifest = toml(text) as BuiltinManifest;
+    return { manifest, name: path.basename(file, ".toml") };
   });
 
-  it("creates the local overrides once and skips setup steps with --skip-packages", () => {
-    const f = starter();
-    f.sync();
-    for (const rel of [
-      ".gitconfig.local",
-      ".config/git/identity.work",
-      ".zshrc.local",
-      ".zprofile.local",
-      ".ssh/config.local",
-    ]) {
-      expect(existsSync(path.join(f.home, rel)), rel).toBe(true);
+const markdownFiles = (dir: string): string[] =>
+  readdirSync(dir, { encoding: "utf-8", recursive: true })
+    .filter((rel) => rel.endsWith(".md"))
+    .map((rel) => path.join(dir, rel));
+
+// Maps a link to a path in this repository, or null for a link to somewhere else.
+const linkedPath = (from: string, link: string): string | null => {
+  const target = link.split("#")[0] ?? "";
+  for (const prefix of [
+    "https://github.com/KayleeWilliams/ender-chest/blob/main/",
+    "https://github.com/KayleeWilliams/ender-chest/tree/main/",
+    "https://raw.githubusercontent.com/KayleeWilliams/ender-chest/main/",
+  ]) {
+    if (target.startsWith(prefix)) {
+      return path.join(workspaceRoot, target.slice(prefix.length));
     }
-    expect(filePermissions(path.join(f.home, ".ssh/config.local"))).toBe(0o600);
-    expect(existsSync(path.join(f.home, ".oh-my-zsh"))).toBe(false);
+  }
+  if (target === "" || scheme.test(target)) {
+    return null;
+  }
+  return path.resolve(path.dirname(from), target);
+};
+
+describe("config example", () => {
+  it("applies, verifies, and captures back without changing the checkout", () => {
+    const f = starter();
+    f.ok("sync", "--skip-packages");
+    f.ok("verify");
+    f.ok("push", "--dry-run");
+    expect(f.git("status", "--porcelain")).toBe("");
+  });
+
+  it("is documented for every built-in plugin with settings ec accepts", () => {
+    const f = starter();
+    const names = builtins.map((b) => b.name);
+    const documented: string[] = [];
+    const blocks = readFileSync(pluginDocs, "utf-8").matchAll(
+      /```toml\n(?<block>[\s\S]*?)```/gu
+    );
+    for (const match of blocks) {
+      const block = match.groups?.block ?? "";
+      // SAFETY: [plugins.NAME] tables parse to a table of setting tables.
+      const config = toml(block) as { plugins?: Record<string, Setting> };
+      const tables = Object.keys(config.plugins ?? {});
+      const shown = tables.filter((name) => names.includes(name));
+      if (shown.length > 0) {
+        documented.push(...shown);
+        appendFileSync(path.join(f.repo, "ender-chest.toml"), `\n${block}`);
+      }
+    }
+    expect(documented.toSorted()).toEqual(names.toSorted());
+
+    // SAFETY: ec plugin list --json reports each plugin's name and missing settings.
+    const listed = JSON.parse(f.ok("plugin", "list", "--json")).data
+      .plugins as { name: string; missing: string[] }[];
+    expect(listed.map((p) => p.name).toSorted()).toEqual(names.toSorted());
+    // Only secrets, which each machine stores with ec secret set, have no value.
+    const secrets = builtins.flatMap(({ manifest, name }) =>
+      Object.entries(manifest.settings ?? {})
+        .filter(([, setting]) => setting.type === "secret")
+        .map(([setting]) => `${name}.${setting}`)
+    );
+    const missing = listed.flatMap((p) =>
+      p.missing.map((m) => `${p.name}.${m}`)
+    );
+    expect(missing.toSorted()).toEqual(secrets.toSorted());
+  });
+
+  it("links only to files that exist, and stays self-contained", () => {
+    const docs = [
+      ...markdownFiles(path.join(workspaceRoot, "examples")),
+      ...markdownFiles(path.join(workspaceRoot, "docs")),
+      ...["README.md", "SECURITY.md", "AGENTS.md"].map((file) =>
+        path.join(workspaceRoot, file)
+      ),
+    ];
+    const broken: string[] = [];
+    for (const file of docs) {
+      const text = readFileSync(file, "utf-8");
+      for (const match of text.matchAll(/\]\((?<link>[^)\s]+)\)/gu)) {
+        const link = match.groups?.link ?? "";
+        const target = linkedPath(file, link);
+        const relative = scheme.test(link) ? null : target;
+        const escapes =
+          file.startsWith(example) &&
+          relative !== null &&
+          !relative.startsWith(example);
+        if ((target !== null && !existsSync(target)) || escapes) {
+          broken.push(`${path.relative(workspaceRoot, file)}: ${link}`);
+        }
+      }
+    }
+    expect(broken).toEqual([]);
   });
 });
