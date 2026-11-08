@@ -85,8 +85,8 @@ jobs:
             console.log('This run prepared a version PR without publishing.');
             process.exit(0);
           }
-          for (let attempt = 0; response.status === 404 && attempt < 5; attempt++) {
-            await setTimeout(3000);
+          for (let attempt = 0; response.status === 404 && attempt < 60; attempt++) {
+            await setTimeout(5000);
             response = await fetch(url);
           }
           if (!response.ok) throw new Error(`npm returned ${response.status}`);

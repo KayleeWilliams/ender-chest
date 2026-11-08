@@ -27,7 +27,7 @@ Use `patch`. The release policy rejects minor and major bumps. Tegami generates 
 4. Merge the version PR. The next run validates the binaries, checksums, and source hash, installs the npm tarball offline, and runs `ec --version`.
 5. Tegami publishes the single npm package with provenance. The workflow then uploads the same release's binaries, checksums, installer, and tarball to GitHub Releases.
 
-The initial npm release has its version and publish lock generated with this setup, so it publishes when the setup reaches `main`.
+The initial npm release has its version and publish lock generated with this setup, so it publishes when the setup reaches `main`. The workflow waits up to five minutes for npm to expose a published version before uploading the GitHub release assets.
 
 Rerun a failed Release workflow from its original commit. Tegami skips npm versions already published. GitHub asset uploads resume only when the npm package's `gitHead` matches that workflow's commit, so later changes cannot overwrite an earlier release. When `TEMPLATE_TOKEN` is set, the workflow also updates ender-chest-template.
 
