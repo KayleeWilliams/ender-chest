@@ -4,6 +4,8 @@ The native CLI lives in `packages/ec/src`, with its built-in plugins in `package
 
 Use pnpm and Turborepo for workspace commands. `pnpm check` runs Ultracite, Zig formatting checks, TypeScript checks, Vitest, and native Zig tests. `pnpm format` applies Oxfmt and Zig formatting. Keep the Oxlint anti-slop rules aligned with the shared Inth tooling.
 
+The private `@ender-chest/native` workspace builds and tests Zig. `packages/ec/npm` is the publishable `ender-chest` package. For user-visible changes, add a patch changelog under `.tegami/`; [the publishing guide](.tegami/README.md) describes version PRs and release checks. Tegami writes the package version, changelog, and publish lock. Do not edit its generated files by hand.
+
 Use temporary homes and config checkouts for tests. Do not apply examples to the developer's real home. Keep credentials, personal config, and private device details out of this repo. Use example.test domains, documentation IP ranges, and fake tokens in fixtures.
 
 Plugin secrets belong in `~/.config/ender-chest/secrets/NAME`, written by `ec secret set`. Generated agent settings also contain credentials and must stay on-device. Preserve regression coverage for secret storage and upload exclusions.

@@ -47,6 +47,9 @@ pub fn run(c: *C, check: bool) !core.Outcome {
     }
     switch (how.method) {
         .package => {
+            if (std.ascii.eqlIgnoreCase(release.repoSlug(c), "KayleeWilliams/ender-chest")) {
+                return c.resultData("update", try c.fmt("{s}\n\nec was installed with npm. Install the new version:\n\n    npm install --global ender-chest@{s}", .{ head, r.version }), data);
+            }
             const file = try release.tarball(c, r.version);
             return c.resultData("update", try c.fmt("{s}\n\nec was installed from the npm tarball. Install the new one:\n\n    gh release download v{s} --repo {s} --pattern {s}\n    npm install --global ./{s}", .{ head, r.version, release.repoSlug(c), file, file }), data);
         },

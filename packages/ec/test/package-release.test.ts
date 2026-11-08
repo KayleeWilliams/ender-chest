@@ -136,7 +136,13 @@ describe("release packaging", () => {
     expect(pkg).toMatchObject({
       bin: { ec: "bin/ec.mjs" },
       engines: { node: ">=20" },
+      gitHead: "b".repeat(40),
       name: "ender-chest",
+      repository: {
+        directory: "packages/ec/npm",
+        type: "git",
+        url: "git+https://github.com/KayleeWilliams/ender-chest.git",
+      },
       version: "0.0.1",
     });
     for (const field of [
@@ -152,6 +158,53 @@ describe("release packaging", () => {
         0o755
       );
     }
+    const repacked = path.join(f.root, "pnpm packed");
+    mkdirSync(repacked);
+    const workspacePackage = JSON.parse(
+      readFileSync(path.join(workspaceRoot, "package.json"), "utf-8")
+    );
+    write(
+      f.root,
+      "package.json",
+      JSON.stringify({
+        packageManager: workspacePackage.packageManager,
+        private: true,
+      })
+    );
+    write(f.root, "pnpm-workspace.yaml", "packages:\n  - package\n");
+    const packageManager = spawnSync("pnpm", ["--version"], {
+      cwd: path.join(f.root, "package"),
+      encoding: "utf-8",
+    });
+    expect(packageManager.status, packageManager.stderr).toBe(0);
+    expect(`pnpm@${packageManager.stdout.trim()}`).toBe(
+      workspacePackage.packageManager
+    );
+    const pack = spawnSync("pnpm", ["pack", "--pack-destination", repacked], {
+      cwd: path.join(f.root, "package"),
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    expect(pack.status, pack.stdout + pack.stderr).toBe(0);
+    const publishedTarball = path.join(repacked, "ender-chest-0.0.1.tgz");
+    const publishedFiles = path.join(f.root, "published files");
+    mkdirSync(publishedFiles);
+    const unpack = spawnSync(
+      "tar",
+      ["-xzf", publishedTarball, "-C", publishedFiles],
+      { encoding: "utf-8" }
+    );
+    expect(unpack.status, unpack.stderr).toBe(0);
+    const publishedPackage = JSON.parse(
+      readFileSync(path.join(publishedFiles, "package/package.json"), "utf-8")
+    );
+    expect(publishedPackage.gitHead).toBe("b".repeat(40));
+    for (const name of names) {
+      expect(
+        filePermissions(path.join(publishedFiles, "package/native", name))
+      ).toBe(0o755);
+    }
+
     const prefix = path.join(f.root, "npm prefix");
     const env = {
       ...process.env,
@@ -171,7 +224,7 @@ describe("release packaging", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        tarball,
+        publishedTarball,
       ],
       { encoding: "utf-8", env, timeout: 15_000 }
     );
@@ -212,14 +265,4 @@ describe("release packaging", () => {
       expect(existsSync(f.output)).toBe(false);
     }
   );
-
-  it("numbers patch releases from 0.0.1", () => {
-    const script = path.join(workspaceRoot, "tools/release-version.sh");
-    const run = (arg?: string) =>
-      spawnSync(script, arg === undefined ? [] : [arg], { encoding: "utf-8" });
-    expect(run().stdout).toBe("0.0.1\n");
-    expect(run("v0.0.1").stdout).toBe("0.0.2\n");
-    expect(run("0.0.9").stdout).toBe("0.0.10\n");
-    expect(run("0.1.0").status).not.toBe(0);
-  });
 });

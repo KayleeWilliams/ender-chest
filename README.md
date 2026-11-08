@@ -29,14 +29,14 @@ curl -fsSL https://github.com/KayleeWilliams/ender-chest/releases/latest/downloa
 
 ### npm
 
-Each [release](https://github.com/KayleeWilliams/ender-chest/releases) also includes an npm tarball with all four native binaries. It requires Node 20+ and runs without install scripts or additional downloads:
+The npm package includes all four native binaries. It requires Node 20+ and runs without install scripts or additional downloads:
 
 ```sh
-npm install --global https://github.com/KayleeWilliams/ender-chest/releases/download/v0.0.1/ender-chest-0.0.1.tgz
+npm install --global ender-chest
 ec --help
 ```
 
-The package is prepared as `ender-chest`, with the command `ec`. It has not been published to the npm registry. `npm install -g ender-chest` becomes available after a separate public publication.
+The package name is `ender-chest`, and the command is `ec`. Each [GitHub release](https://github.com/KayleeWilliams/ender-chest/releases) also includes an npm tarball for offline installation.
 
 ## Get started
 
@@ -79,9 +79,9 @@ Update available 0.0.5 → 0.0.6 · Run ec update
 
 The notice appears at most once a day. The check sends one request to the GitHub releases API at most once a day, with no account or command details, and gives up after about three seconds. `ec sync`, `ec update`, plugin commands, `--json`, CI, and output that is not a terminal skip it. Set `EC_NO_UPDATE=1` or `NO_UPDATE_NOTIFIER=1` to turn off the notice; `EC_NO_UPDATE=1` also stops sync from installing releases and `ec status` from reading the latest release.
 
-If you installed the npm tarball, `ec update` prints the commands that install the newer tarball. For a project dependency, update `ender-chest` in that project.
+If you installed with npm, `ec update` prints the npm command for the newer version. For a project dependency, update `ender-chest` in that project. Forks still use their GitHub tarballs.
 
-The manual release workflow builds ARM64 and x86-64 binaries for macOS 13+ and Linux musl.
+Releases build ARM64 and x86-64 binaries for macOS 13+ and Linux musl.
 
 ## Development
 
@@ -117,9 +117,9 @@ tools/                build, release, and lint tooling
 docs/                 config, plugin, and device guides
 ```
 
-Run `pnpm --filter ender-chest <script>` to target the CLI package. `./ec` builds and runs it without requiring Node. CI checks the workspace on macOS and Linux, builds all four native targets, and scans Git history for secrets.
+Run `pnpm --filter @ender-chest/native <script>` to target the CLI package. `./ec` builds and runs it without requiring Node. CI checks the workspace on macOS and Linux, builds all four native targets, and scans Git history for secrets.
 
-The manual release workflow packages the binaries, checksums, installer, and npm tarball. It checks the native targets and shared source hash, then installs the tarball offline and runs `ec --version` before publishing to GitHub Releases. It does not publish to npm or change repository visibility. When the `TEMPLATE_TOKEN` secret is set, it then publishes `examples/config` to ender-chest-template with `tools/publish-template.sh`.
+[Tegami](.tegami/README.md) opens version PRs from patch changelogs. After the version PR merges, the release workflow validates and tests the native packages, publishes `ender-chest` to npm using trusted publishing, and uploads the binaries, checksums, installer, and npm tarball to GitHub Releases. When `TEMPLATE_TOKEN` is set, it then publishes `examples/config` to ender-chest-template.
 
 [FX](https://github.com/vercel-labs/fx) informed the native binary and Zig test setup. [Inth](https://github.com/inthhq/inth/tree/main/packages/cli) informed grouped commands, scoped help, typed discovery, and stable errors. Ender Chest uses its own implementation.
 

@@ -15,26 +15,27 @@ const quiet = () => {
   mkdirSync(other, { recursive: true });
   const gone = path.join(f.root, "gone");
   const killed = path.join(f.root, "killed");
+  // PIDs outside the supported systems' range cannot collide with the real CLI process.
   // pid -> working directory
   const cwds = {
-    101: gone,
-    102: other,
-    103: other,
-    104: path.join(work, "app"),
-    105: other,
-    106: other,
-    108: other,
+    1_000_000_101: gone,
+    1_000_000_102: other,
+    1_000_000_103: other,
+    1_000_000_104: path.join(work, "app"),
+    1_000_000_105: other,
+    1_000_000_106: other,
+    1_000_000_108: other,
   };
   const ps = [
-    "101 1 03:10:00 0.0 node /w/node_modules/next/dist/bin/next dev",
-    "102 1 25:00 1.0 node /w/node_modules/vite/bin/vite.js",
-    "103 1 1-02:00:00 0.5 /w/node_modules/@esbuild/darwin-arm64/bin/esbuild --service=0.28.1 --ping",
-    "104 1 05:00:00 2.0 node /w/node_modules/.bin/storybook dev -p 6006",
-    "105 1 09:00:00 80.0 node /opt/homebrew/bin/claude --resume",
-    "106 107 09:00:00 3.0 /home/user/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell --headless",
-    "107 1 09:00:00 4.0 /home/user/.t3/runtime/versions/0.0.46/t3 serve",
-    "108 1 05:00:00 0.1 node /w/node_modules/next/dist/server/lib/start-server.js",
-    "200 1 02:00:00 55.0 /Applications/Browser.app/Contents/MacOS/Browser --type=renderer",
+    "1000000101 1 03:10:00 0.0 node /w/node_modules/next/dist/bin/next dev",
+    "1000000102 1 25:00 1.0 node /w/node_modules/vite/bin/vite.js",
+    "1000000103 1 1-02:00:00 0.5 /w/node_modules/@esbuild/darwin-arm64/bin/esbuild --service=0.28.1 --ping",
+    "1000000104 1 05:00:00 2.0 node /w/node_modules/.bin/storybook dev -p 6006",
+    "1000000105 1 09:00:00 80.0 node /opt/homebrew/bin/claude --resume",
+    "1000000106 1000000107 09:00:00 3.0 /home/user/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell --headless",
+    "1000000107 1 09:00:00 4.0 /home/user/.t3/runtime/versions/0.0.46/t3 serve",
+    "1000000108 1 05:00:00 0.1 node /w/node_modules/next/dist/server/lib/start-server.js",
+    "1000000200 1 02:00:00 55.0 /Applications/Browser.app/Contents/MacOS/Browser --type=renderer",
   ].join("\n");
   const env = {
     ...f.fake("ps", `console.log(${JSON.stringify(ps)})`),
@@ -76,9 +77,9 @@ describe("quiet plugin", () => {
         s.reason,
       ])
     ).toEqual([
-      [101, "worktree deleted"],
-      [103, "running 26h00m"],
-      [108, "running 5h00m"],
+      [1_000_000_101, "worktree deleted"],
+      [1_000_000_103, "running 26h00m"],
+      [1_000_000_108, "running 5h00m"],
     ]);
     expect(result.data).toMatchObject({
       containers: [{ id: "abc123", name: "app-postgres-1" }],
@@ -102,7 +103,12 @@ describe("quiet plugin", () => {
     const terminated = [...calls.matchAll(/^kill -TERM (?<pids>.+)$/gmu)]
       .flatMap((m) => m.groups?.pids?.split(" ") ?? [])
       .toSorted();
-    expect(terminated).toEqual(["101", "102", "103", "108"]);
+    expect(terminated).toEqual([
+      "1000000101",
+      "1000000102",
+      "1000000103",
+      "1000000108",
+    ]);
     expect(calls).not.toContain("-KILL");
     expect(calls).toMatch(/^docker stop .*abc123$/mu);
     expect(r.stdout).toContain("Stopped 4 dev process(es) and 1 container(s).");

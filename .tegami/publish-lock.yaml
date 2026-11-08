@@ -1,0 +1,11 @@
+core:changelogs:
+  - content: "---\npackages:\n  ender-chest:\n    type: patch\n---\n\n### Install Ender Chest from npm\n\nInstall the native CLI with `npm install --global ender-chest`. The package includes macOS and Linux binaries for ARM64 and x86-64, with no install scripts or extra downloads. npm releases use GitHub trusted publishing and include provenance.\n\nSync also supports Cursor, Meta Muse Code, Gemini CLI, and OpenCode v2. It preserves local agent settings and backs up existing instruction files. The starter config includes settings examples for all supported agents.\n"
+    filename: 2026-11-08-npm-publishing.md
+    v: 0.0.0
+core:packages:
+  - changelogIds:
+      - 2026-11-08-npm-publishing.md
+    id: npm:ender-chest
+    updated: true
+npm:packages:
+  - id: npm:ender-chest

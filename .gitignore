@@ -34,6 +34,10 @@ home/.cli-proxy-api/
 .local-ci-cache/
 dist/
 publish/
+packages/ec/npm/bin/
+packages/ec/npm/native/
+packages/ec/npm/LICENSE
+packages/ec/npm/THIRD_PARTY_NOTICES.txt
 
 # Workspace task output
 .turbo/

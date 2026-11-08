@@ -68,19 +68,8 @@ def main():
         binaries[name] = data
         assets[key] = {"name": name, "sha256": digest}
 
-    source_package = json.loads((ROOT / "packages/ec/package.json").read_text())
-    package = {
-        key: source_package[key]
-        for key in ("name", "description", "license", "repository", "type")
-    }
-    package.update({
-        "version": args.version,
-        "bin": {"ec": "bin/ec.mjs"},
-        "engines": {"node": ">=20"},
-        "os": ["darwin", "linux"],
-        "cpu": ["arm64", "x64"],
-        "files": ["bin", "native", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.txt"],
-    })
+    package = json.loads((ROOT / "packages/ec/npm/package.json").read_text())
+    package.update({"version": args.version, "gitHead": args.commit})
     args.output.mkdir(parents=True)
     for name, data in binaries.items():
         dest = args.output / name

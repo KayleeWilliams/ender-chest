@@ -1,119 +1,123 @@
-name: release
+name: Release
+
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-permissions:
-  contents: read
+
+permissions: {}
+
 concurrency:
   group: ec-release
   cancel-in-progress: false
+
 jobs:
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.plan.outputs.version }}
-      source_hash: ${{ steps.plan.outputs.source_hash }}
-      targets: ${{ steps.targets.outputs.targets }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install archive tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
-      - name: Hash Zig sources
-        id: hash
-        run: |
-          set -eu
-          (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe)
-          hash=$(tr -d '[:space:]' < packages/ec/zig-out/source_hash.txt)
-          echo "source_hash=$hash" >> "$GITHUB_OUTPUT"
-      - name: List release targets
-        id: targets
-        run: echo "targets=$(jq -c . packages/ec/src/targets.json)" >> "$GITHUB_OUTPUT"
-      - name: Choose the next patch release
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_HASH: ${{ steps.hash.outputs.source_hash }}
-        run: |
-          set -eu
-          echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
-          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '[.[] | select(.draft == false and .prerelease == false)][0].tag_name // ""')
-          if [ -n "$tag" ]; then
-            dir=$(mktemp -d)
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern manifest.json --dir "$dir"
-            published=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit", ""))' "$dir/manifest.json")
-            if [ "$published" = "$GITHUB_SHA" ]; then
-              echo "ec $tag already matches this commit."
-              echo "version=" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          echo "version=$(tools/release-version.sh "$tag")" >> "$GITHUB_OUTPUT"
-  binaries:
-    needs: plan
-    if: needs.plan.outputs.version != ''
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.targets) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install archive tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
-      - name: Build the release binary
-        run: |
-          set -eu
-          (cd packages/ec && ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig }} -Dversion=${{ needs.plan.outputs.version }})
-          test "$(tr -d '[:space:]' < packages/ec/zig-out/source_hash.txt)" = "${{ needs.plan.outputs.source_hash }}"
-          mkdir -p dist
-          cp packages/ec/zig-out/bin/ec "dist/ec-${{ matrix.key }}"
-          cp packages/ec/zig-out/source_hash.txt dist/source_hash.txt
-          sha256sum "dist/ec-${{ matrix.key }}" | awk '{print $1}' > "dist/ec-${{ matrix.key }}.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ec-${{ matrix.key }}
-          path: dist/*
-  publish:
-    needs: [plan, binaries]
-    if: needs.plan.outputs.version != ''
-    runs-on: ubuntu-latest
+  verify:
+    if: github.repository == 'KayleeWilliams/ender-chest' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
     permissions:
+      contents: read
+
+  release:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
       contents: write
+      pull-requests: write
+      id-token: write
+    outputs:
+      published: ${{ steps.npm.outputs.published }}
+      version: ${{ steps.package.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: .node-version
-      - uses: actions/download-artifact@v4
+          registry-url: https://registry.npmjs.org
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: ec-*
           path: dist
       - name: Prepare and test the release packages
-        env:
-          VERSION: ${{ needs.plan.outputs.version }}
-          SOURCE_HASH: ${{ needs.plan.outputs.source_hash }}
+        id: package
         run: |
           set -eu
+          version=$(jq -r .version packages/ec/npm/package.json)
+          source_hash=$(find dist -name source_hash.txt -exec cat {} \; -quit | tr -d '[:space:]')
           python3 tools/package-release.py --artifacts dist --output publish \
-            --version "$VERSION" --commit "$GITHUB_SHA" --source-hash "$SOURCE_HASH"
+            --version "$version" --commit "$GITHUB_SHA" --source-hash "$source_hash"
           sh -n publish/install.sh
-          npm install --prefix "$RUNNER_TEMP/ec-npm" --offline --ignore-scripts --no-audit --no-fund "./publish/ender-chest-$VERSION.tgz"
-          "$RUNNER_TEMP/ec-npm/node_modules/.bin/ec" --version | grep -F "ec $VERSION "
-      - name: Publish the patch release
+          npm install --prefix "$RUNNER_TEMP/ec-npm" --offline --ignore-scripts --no-audit --no-fund "./publish/ender-chest-$version.tgz"
+          "$RUNNER_TEMP/ec-npm/node_modules/.bin/ec" --version | grep -F "ec $version "
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          node --input-type=module <<'JS'
+          import { appendFile } from 'node:fs/promises';
+          import { createRelease } from './tools/tegami.ts';
+          const draft = await createRelease().draft();
+          await appendFile(process.env.GITHUB_OUTPUT, `version_pr=${draft.hasPending()}\n`);
+          JS
+      - name: Version or publish the npm package
+        run: pnpm tegami ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+      - name: Check npm publication for this commit
+        id: npm
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+          VERSION_PR: ${{ steps.package.outputs.version_pr }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFile } from 'node:fs/promises';
+          import { setTimeout } from 'node:timers/promises';
+          const url = `https://registry.npmjs.org/ender-chest/${process.env.VERSION}`;
+          let response = await fetch(url);
+          if (response.status === 404 && process.env.VERSION_PR === 'true') {
+            console.log('This run prepared a version PR without publishing.');
+            process.exit(0);
+          }
+          for (let attempt = 0; response.status === 404 && attempt < 5; attempt++) {
+            await setTimeout(3000);
+            response = await fetch(url);
+          }
+          if (!response.ok) throw new Error(`npm returned ${response.status}`);
+          const pkg = await response.json();
+          if (pkg.gitHead !== process.env.GITHUB_SHA) {
+            console.log('This npm version belongs to another commit.');
+            process.exit(0);
+          }
+          await appendFile(process.env.GITHUB_OUTPUT, 'published=true\n');
+          JS
+      - name: Publish the GitHub release assets
+        if: steps.npm.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.plan.outputs.version }}
-          SOURCE_HASH: ${{ needs.plan.outputs.source_hash }}
+          VERSION: ${{ steps.package.outputs.version }}
         run: |
           set -eu
-          gh release create "v$VERSION" publish/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "ec $VERSION" \
-            --notes "ec $VERSION"$'\n\n'"source $SOURCE_HASH"$'\n'"commit $GITHUB_SHA"
+          tag="v$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            target=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)
+            test "$target" = "$GITHUB_SHA"
+            gh release upload "$tag" publish/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" publish/* \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "ec $VERSION" --generate-notes
+          fi
+
   template:
-    needs: [plan, publish]
-    if: needs.plan.outputs.version != ''
+    needs: release
+    if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     env:
       TEMPLATE_TOKEN: ${{ secrets.TEMPLATE_TOKEN }}
@@ -135,7 +139,7 @@ jobs:
       - name: Publish examples/config to the template
         if: env.TEMPLATE_TOKEN != ''
         env:
-          VERSION: ${{ needs.plan.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -eu
           git -C template config user.name "github-actions[bot]"

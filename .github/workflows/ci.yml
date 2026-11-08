@@ -1,6 +1,9 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -61,4 +64,17 @@ jobs:
           persist-credentials: false
       - name: Install archive tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq xz-utils
-      - run: ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig }}
+      - name: Build and checksum the release binary
+        run: |
+          set -eu
+          version=$(jq -r .version npm/package.json)
+          ../../tools/zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.zig }} -Dversion="$version"
+          mkdir -p dist
+          cp zig-out/bin/ec "dist/ec-${{ matrix.key }}"
+          cp zig-out/source_hash.txt dist/source_hash.txt
+          sha256sum "dist/ec-${{ matrix.key }}" | awk '{print $1}' > "dist/ec-${{ matrix.key }}.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ec-${{ matrix.key }}
+          path: packages/ec/dist/*
+          if-no-files-found: error

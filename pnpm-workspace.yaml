@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - packages/ec/npm
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:

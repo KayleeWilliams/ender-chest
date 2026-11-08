@@ -1,5 +1,5 @@
 {
-  "name": "ender-chest",
+  "name": "@ender-chest/native",
   "version": "0.0.0",
   "private": true,
   "description": "Sync development machine config and agent skills with a native CLI.",

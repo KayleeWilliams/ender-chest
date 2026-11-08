@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,7 +66,7 @@ process.stdout.write(fs.readFileSync(source));`;
 const binary = (version: string, runs = true) =>
   `#!/bin/sh\nif [ "\${1-}" = --version ]; then ${runs ? `echo "ec ${version} (abcdef0)"` : "exit 1"}; exit; fi\necho "$*" > "$HOME/ran-${version}"\n`;
 
-const setup = () => {
+const setup = (location = "bin/ec") => {
   const root = mkdtempSync(path.join(tmpdir(), "ec-update-"));
   roots.push(root);
   const home = path.join(root, "home");
@@ -76,7 +77,8 @@ const setup = () => {
   mkdirSync(bin);
   mkdirSync(github);
   // Each test runs its own copy, so ec update replaces that copy.
-  const exe = path.join(bin, "ec");
+  const exe = path.join(root, location);
+  mkdirSync(path.dirname(exe), { recursive: true });
   copyFileSync(released, exe);
   chmodSync(exe, 0o755);
   const fake = (name: string, code: string) => {
@@ -218,6 +220,50 @@ describe("ec update", () => {
       update_available: true,
       updated: false,
     });
+    expect(readFileSync(f.exe)).toEqual(before);
+  });
+
+  it.each([
+    {
+      command: "npm install --global ender-chest@0.0.9",
+      name: "the official npm package",
+      repo: "",
+    },
+    {
+      command:
+        "gh release download v0.0.9 --repo example/ec --pattern ender-chest-0.0.9.tgz\n    npm install --global ./ender-chest-0.0.9.tgz",
+      name: "a fork's npm tarball",
+      repo: "example/ec",
+    },
+  ])(
+    "prints the update command for $name without replacing it",
+    ({ command, repo }) => {
+      const f = setup("npm-prefix/lib/node_modules/ender-chest/native/ec");
+      const before = readFileSync(f.exe);
+      const r = f.run(["update"], {
+        EC_RELEASE_MANIFEST: f.release("0.0.9").manifest,
+        EC_RELEASE_REPO: repo,
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).toContain(command);
+      expect(readFileSync(f.exe)).toEqual(before);
+    }
+  );
+
+  it("leaves a project dependency to its package manager", () => {
+    const f = setup("project/node_modules/ender-chest/native/ec");
+    const project = path.join(f.root, "project");
+    write(project, "package.json", '{"dependencies":{"ender-chest":"0.0.5"}}');
+    const before = readFileSync(f.exe);
+    const r = f.run(["update"], {
+      EC_RELEASE_MANIFEST: f.release("0.0.9").manifest,
+      EC_RELEASE_REPO: "",
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain(
+      `ec is a dependency of the project in ${realpathSync(project)}`
+    );
+    expect(r.stdout).not.toContain("npm install --global");
     expect(readFileSync(f.exe)).toEqual(before);
   });
 

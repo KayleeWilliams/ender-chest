@@ -1,0 +1,42 @@
+{
+  "name": "ender-chest",
+  "version": "0.0.5",
+  "description": "Sync development machine config and agent skills with a native CLI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KayleeWilliams/ender-chest.git",
+    "directory": "packages/ec/npm"
+  },
+  "bin": {
+    "ec": "bin/ec.mjs"
+  },
+  "files": [
+    "bin",
+    "native",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.txt"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "executableFiles": [
+      "native/ec-aarch64-macos",
+      "native/ec-x86_64-macos",
+      "native/ec-aarch64-linux",
+      "native/ec-x86_64-linux"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
